@@ -1,7 +1,7 @@
 [project]
-name = "kiwix-updater"
+name = "zim-pro"
 version = "0.1.0"
-description = "Add your description here"
+description = "Self-hosted ZIM library: read, search and update offline books, ask AI with cited sources, and serve them to LLM apps over MCP."
 readme = "README.md"
 authors = [
     { name = "Kuldip Satpute", email = "satputekuldip@gmail.com" }
@@ -19,11 +19,15 @@ dependencies = [
 ]
 
 [project.scripts]
+zim-pro = "kiwix_updater:main"
 kiwix-updater = "kiwix_updater:main"
 
 [build-system]
 requires = ["uv_build>=0.12.24,<0.13.0"]
 build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "kiwix_updater"
 
 [dependency-groups]
 dev = [

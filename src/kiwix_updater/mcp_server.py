@@ -20,7 +20,7 @@ unchanged."""
 
 
 def build_mcp(ctx: Context) -> MCPServer:
-    mcp = MCPServer("kiwix-library", instructions=INSTRUCTIONS)
+    mcp = MCPServer("zim-pro", instructions=INSTRUCTIONS)
 
     def _book_summary(book: dict[str, Any]) -> dict[str, Any]:
         return {

@@ -1,6 +1,6 @@
 {
-  "name": "Kiwix Library",
-  "short_name": "Library",
+  "name": "Zim Pro",
+  "short_name": "Zim Pro",
   "description": "Your offline library: read, search and ask.",
   "start_url": "/",
   "display": "standalone",

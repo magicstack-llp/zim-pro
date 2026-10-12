@@ -113,9 +113,9 @@ export default function Search() {
       <div className="mx-auto flex min-h-[calc(100dvh-12rem)] max-w-2xl flex-col items-center justify-center gap-6 pb-10 kb:min-h-0 kb:justify-start kb:pt-2 sm:min-h-[70vh] sm:pb-24">
         <h1 className="flex items-center gap-3 text-4xl font-semibold tracking-tight sm:text-5xl">
           <span className="bg-brand-700 flex h-12 w-12 items-center justify-center rounded-2xl text-2xl font-bold text-white sm:h-14 sm:w-14">
-            K
+            Z
           </span>
-          Kiwix Library
+          Zim Pro
         </h1>
         {form(true)}
         {scopeBar}

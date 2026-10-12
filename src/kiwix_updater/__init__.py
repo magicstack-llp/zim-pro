@@ -5,7 +5,7 @@ import logging
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        prog="kiwix-updater", description="ZIM library server, updater and MCP server."
+        prog="zim-pro", description="ZIM library server, updater and MCP server."
     )
     commands = parser.add_subparsers(dest="command")
     commands.add_parser("serve", help="run the web server (default)")

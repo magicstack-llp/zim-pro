@@ -25,7 +25,7 @@ SEGMENT_BYTES = 64 * 1024 * 1024
 CHUNK_BYTES = 256 * 1024
 MIRROR_MAX_FAILURES = 4
 MAX_STALLED_ROUNDS = 6
-USER_AGENT = "kiwix-updater/0.1"
+USER_AGENT = "zim-pro/0.1"
 
 
 class DownloadError(Exception):

@@ -1,20 +1,31 @@
-# Kiwix Updater
+# Zim Pro
 
-A self-hosted replacement for `kiwix-serve`: browse, read and search a folder of ZIM files,
-keep them updated from the Kiwix catalog, and expose the library to LLM apps over MCP.
+Your offline library, self-hosted. Zim Pro serves a folder of [ZIM](https://openzim.org) files
+(offline Wikipedia, Stack Exchange, DevDocs, iFixit and the rest of the
+[Kiwix catalog](https://library.kiwix.org)), keeps them up to date, answers questions from
+them with a language model, and exposes them to LLM apps over MCP. It replaces `kiwix-serve`.
 
-- **Reader** – `/content/<book>/<path>` serves ZIM entries (redirects, `Range` for video).
-- **Markdown** – `/markdown/<book>/<path>` gives the same article as Markdown: its text and
+## What it does
+
+- **Read** – a reader for every book, with in-book search and title suggestions. Entries are
+  served at `/content/<book>/<path>` as `kiwix-serve` does, including `Range` for video.
+- **Search** – full text within a book, or across the whole library with results grouped by
+  book.
+- **Ask AI** – ask a question and get an answer written from your books, with numbered
+  citations, the source passages beside it, and the pictures and videos from those pages.
+  Works with any OpenAI-compatible chat API, hosted or local, and with two free providers
+  out of the box.
+- **Markdown** – `/markdown/<book>/<path>` gives any article as Markdown: its text and
   pictures, with links leading to the Markdown of other articles. The reader's **Markdown**
   button shows it in place, with a copy button; videos and recordings play there too.
-- **Search** – full text per book, grouped results across all books, title suggestions.
-- **Updates** – compares each local book with `library.kiwix.org` and lists newer releases;
-  per-book policy: automatic, ask first, or pinned.
-- **Downloader** – multi-connection across the Kiwix mirrors, SHA-1 checked per 4 MiB piece,
-  SHA-256 checked at the end, resumes after a pause, restart or crash.
-- **Ask AI** – ask a question and get an answer written from your books, with sources cited.
-  Works with any OpenAI-compatible chat API, hosted or local.
-- **MCP** – streamable HTTP at `/mcp`, or stdio with `kiwix-updater mcp`.
+- **Updates** – compares each book with the Kiwix catalog and lists newer releases, with a
+  policy per book: automatic, ask first, or pinned.
+- **Downloads** – multi-connection across the Kiwix mirrors, SHA-1 checked per 4 MiB piece
+  and SHA-256 checked at the end. Resumes after a pause, a restart or a crash.
+- **Catalog** – browse the whole Kiwix library and add books.
+- **MCP** – the library as tools for Claude and other LLM apps: streamable HTTP at `/mcp`,
+  or stdio with `zim-pro mcp`.
+- **Phone-friendly** – installable as a web app, with a layout made for small screens.
 
 ## Run with Docker
 
@@ -24,13 +35,14 @@ docker compose up -d --build     # http://localhost:8083
 ```
 
 `compose.yml` mounts `/mnt/storage/Media/Kiwix/data` as the library and `./state` for the
-SQLite database. The container runs as uid 1000, which must be able to write to both.
+SQLite database; change the first path to your own folder of ZIM files. The container runs as
+uid 1000, which must be able to write to both.
 
 ## Run from source
 
 ```sh
 (cd web && npm ci && npm run build)
-KIWIX_DATA_DIR=/path/to/zims KIWIX_STATE_DIR=./state uv run kiwix-updater
+KIWIX_DATA_DIR=/path/to/zims KIWIX_STATE_DIR=./state uv run zim-pro
 ```
 
 For UI work, run `npm run dev` in `web/` (set `KIWIX_BACKEND` if the server is not on
@@ -47,6 +59,10 @@ For UI work, run `npm run dev` in `web/` (set `KIWIX_BACKEND` if the server is n
 | `KIWIX_CATALOG_URL` | Kiwix OPDS feed | Catalog to check for updates |
 
 Download limits, the update schedule and policies are set in the web UI under Settings.
+
+The project was first called Kiwix Updater. The Python package (`kiwix_updater`), the
+`KIWIX_*` variables, the database file and the container name keep that name, so existing
+installs carry on unchanged; the `kiwix-updater` command still works alongside `zim-pro`.
 
 ## Ask AI
 
@@ -106,13 +122,13 @@ provider's speech model (OpenAI, Gemini, Groq, or a local `/audio/speech` server
 ## MCP
 
 ```sh
-claude mcp add --transport http kiwix http://localhost:8083/mcp
+claude mcp add --transport http zim-pro http://localhost:8083/mcp
 ```
 
 Tools: `list_books`, `search`, `suggest`, `get_article`, `get_article_outline`,
 `list_updates`, and `start_update` (off until enabled in Settings).
 
-For a stdio client, run `kiwix-updater mcp` with `KIWIX_DATA_DIR` and `KIWIX_STATE_DIR` set.
+For a stdio client, run `zim-pro mcp` with `KIWIX_DATA_DIR` and `KIWIX_STATE_DIR` set.
 
 ## Notes
 
@@ -129,3 +145,9 @@ For a stdio client, run `kiwix-updater mcp` with `KIWIX_DATA_DIR` and `KIWIX_STA
 uv run pytest
 (cd web && npm test)
 ```
+
+## Built with
+
+Python 3.13, FastAPI and [python-libzim](https://github.com/openzim/python-libzim) on the
+server, SQLite for state, and React, Vite and Tailwind for the web app. Zim Pro is an
+independent project and is not affiliated with Kiwix.

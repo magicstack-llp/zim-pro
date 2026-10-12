@@ -75,11 +75,11 @@ export default function Reader() {
     api<Book>(`/api/books/${encodeURIComponent(bookId)}`)
       .then((found) => {
         setBook(found);
-        document.title = `${found.title} · Kiwix Library`;
+        document.title = `${found.title} · Zim Pro`;
       })
       .catch(() => setMissing(true));
     return () => {
-      document.title = "Kiwix Library";
+      document.title = "Zim Pro";
     };
   }, [bookId]);
 

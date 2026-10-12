@@ -68,7 +68,7 @@ function Shell() {
       <nav className="sticky top-0 z-20 hidden h-screen w-52 shrink-0 flex-col border-r border-zinc-200 bg-white/90 px-3 py-5 md:flex dark:border-zinc-800 dark:bg-zinc-900/90" aria-label="Main">
         <div className="mb-5 flex items-center gap-2 px-1">
           <img src="/icon.svg" alt="" className="h-8 w-8 rounded-lg" />
-          <span className="font-semibold">Kiwix Library</span>
+          <span className="font-semibold">Zim Pro</span>
         </div>
         {links.map((link) => (
           <NavLink

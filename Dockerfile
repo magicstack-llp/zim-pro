@@ -17,4 +17,4 @@ RUN uv sync --frozen --no-dev
 COPY --from=web /web/dist /app/web
 VOLUME ["/data", "/state"]
 EXPOSE 8080
-CMD ["kiwix-updater"]
+CMD ["zim-pro"]

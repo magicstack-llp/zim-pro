@@ -55,7 +55,7 @@ def create_app(config: Config | None = None) -> FastAPI:
         await ctx.downloads.stop()
         ctx.db.close()
 
-    app = FastAPI(title="Kiwix Updater", lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
+    app = FastAPI(title="Zim Pro", lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
     app.state.ctx = ctx
 
     @app.middleware("http")
