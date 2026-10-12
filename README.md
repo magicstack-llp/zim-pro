@@ -1,9 +1,22 @@
 # Zim Pro
 
-Your offline library, self-hosted. Zim Pro serves a folder of [ZIM](https://openzim.org) files
+**An offline AI knowledge base.** Zim Pro turns a folder of [ZIM](https://openzim.org) files
 (offline Wikipedia, Stack Exchange, DevDocs, iFixit and the rest of the
-[Kiwix catalog](https://library.kiwix.org)), keeps them up to date, answers questions from
-them with a language model, and exposes them to LLM apps over MCP. It replaces `kiwix-serve`.
+[Kiwix catalog](https://library.kiwix.org)) into a library you can read, search and question,
+on your own machine.
+
+- **Knowledge that stays with you.** The books live on your disk and are read, searched and
+  kept up to date by your own server.
+- **AI that answers from them.** Ask a question and the answer is written from your books,
+  with citations you can open and the pictures and videos from the pages it used.
+- **Fully offline when you want it.** Point it at a local model (Ollama, LM Studio,
+  llama.cpp) and nothing leaves your network: no internet is needed to read, search or ask.
+  Hosted models and web search are there if you choose them, and the internet is otherwise
+  only used to download and update books.
+- **A knowledge source for your other AI tools.** The same library is served over MCP, so
+  Claude and other LLM apps can search and read it.
+
+It replaces `kiwix-serve`.
 
 ## What it does
 
@@ -29,14 +42,90 @@ them with a language model, and exposes them to LLM apps over MCP. It replaces `
 
 ## Run with Docker
 
+The image is published at `ghcr.io/magicstack-llp/zim-pro` for amd64 and arm64. It needs two
+folders: your ZIM files, mounted at `/data`, and a folder for its database, mounted at
+`/state`. The container runs as the user you give it, who must be able to write to both
+(to `/data` because that is where downloads and updates go).
+
+### docker run
+
 ```sh
-mkdir -p state                   # must exist and belong to you, or Docker creates it as root
+mkdir -p zims state              # create them yourself, or Docker creates them as root
+docker run -d --name zim-pro \
+  --restart unless-stopped \
+  --user "$(id -u):$(id -g)" \
+  -p 8083:8080 \
+  -v "$PWD/zims:/data" \
+  -v "$PWD/state:/state" \
+  --add-host host.docker.internal:host-gateway \
+  ghcr.io/magicstack-llp/zim-pro:latest
+```
+
+Then open http://localhost:8083. `--add-host` is only needed for Ask AI to reach a model
+server on the same machine (Ollama, LM Studio, llama.cpp).
+
+### docker compose
+
+```yaml
+services:
+  zim-pro:
+    image: ghcr.io/magicstack-llp/zim-pro:latest
+    container_name: zim-pro
+    restart: unless-stopped
+    user: "1000:1000"                # your own uid:gid, from `id -u` and `id -g`
+    ports:
+      - "8083:8080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./zims:/data                 # your folder of .zim files
+      - ./state:/state
+    # environment:
+    #   KIWIX_ADMIN_TOKEN: change-me # required for changes and /mcp when set
+```
+
+```sh
+mkdir -p zims state
+docker compose up -d
+```
+
+### Everyday commands
+
+| To | docker compose | docker run |
+|---|---|---|
+| See the logs | `docker compose logs -f` | `docker logs -f zim-pro` |
+| Stop | `docker compose stop` | `docker stop zim-pro` |
+| Start again | `docker compose start` | `docker start zim-pro` |
+| Update to the newest image | `docker compose pull && docker compose up -d` | `docker pull ghcr.io/magicstack-llp/zim-pro:latest`, then `docker rm -f zim-pro` and the `docker run` above |
+| Remove the container | `docker compose down` | `docker rm -f zim-pro` |
+
+Removing the container loses nothing: the books are in `zims` and the settings, chats and
+download progress are in `state`. A download in progress when the container stops carries on
+from where it was when it starts again.
+
+To stay on one version, use a version tag in place of `latest`, such as `:0.1.0` or `:0.1`.
+
+### Build the image yourself
+
+The `compose.yml` in this repository builds from source:
+
+```sh
+mkdir -p state
 docker compose up -d --build     # http://localhost:8083
 ```
 
-`compose.yml` mounts `/mnt/storage/Media/Kiwix/data` as the library and `./state` for the
-SQLite database; change the first path to your own folder of ZIM files. The container runs as
-uid 1000, which must be able to write to both.
+It mounts `/mnt/storage/Media/Kiwix/data` as the library; change that path to your own
+folder of ZIM files.
+
+## Install as a Python package
+
+Each [release](https://github.com/magicstack-llp/zim-pro/releases) has a wheel with the web
+app inside. It needs Python 3.13 on Linux or macOS.
+
+```sh
+pip install https://github.com/magicstack-llp/zim-pro/releases/download/v0.1.0/zim_pro-0.1.0-py3-none-any.whl
+KIWIX_DATA_DIR=/path/to/zims KIWIX_STATE_DIR=./state zim-pro   # http://localhost:8080
+```
 
 ## Run from source
 
@@ -60,9 +149,9 @@ For UI work, run `npm run dev` in `web/` (set `KIWIX_BACKEND` if the server is n
 
 Download limits, the update schedule and policies are set in the web UI under Settings.
 
-The project was first called Kiwix Updater. The Python package (`kiwix_updater`), the
-`KIWIX_*` variables, the database file and the container name keep that name, so existing
-installs carry on unchanged; the `kiwix-updater` command still works alongside `zim-pro`.
+The project was first called Kiwix Updater. The `KIWIX_*` variables and the database file
+(`kiwix-updater.sqlite3`) keep that name so existing installs carry on unchanged, and the
+`kiwix-updater` command still works alongside `zim-pro`.
 
 ## Ask AI
 
@@ -81,7 +170,7 @@ For a model server on the Docker host, use `http://host.docker.internal:<port>/v
 `11434`, LM Studio: `1234`), not `localhost`, and make the server listen on all interfaces
 (for Ollama, `OLLAMA_HOST=0.0.0.0`).
 
-How a question is answered (see `src/kiwix_updater/retrieval.py`):
+How a question is answered (see `src/zim_pro/retrieval.py`):
 
 1. **Plan.** The model is shown the list of books and returns several short queries from
    different angles, extra keywords a good article would contain, and the books most likely
@@ -151,3 +240,18 @@ uv run pytest
 Python 3.13, FastAPI and [python-libzim](https://github.com/openzim/python-libzim) on the
 server, SQLite for state, and React, Vite and Tailwind for the web app. Zim Pro is an
 independent project and is not affiliated with Kiwix.
+
+## Releasing
+
+Pushing a tag of the form `v1.2.3` runs `.github/workflows/release.yml`, which tests the
+code, publishes the Docker image to GHCR as `1.2.3`, `1.2` and `latest`, and creates a GitHub
+release with the wheel and source archive attached. The package version comes from the tag,
+and the release notes from that version's section of `CHANGELOG.md`, so move the entries
+under "Unreleased" to a new version heading before tagging.
+
+Every push to `master` and every pull request runs `.github/workflows/ci.yml`: Python lint
+(`ruff check`), formatting check and tests, and the web app's type check, tests and build.
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```

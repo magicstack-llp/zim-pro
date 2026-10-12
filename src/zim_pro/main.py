@@ -32,7 +32,9 @@ def build_context(config: Config) -> Context:
 
 
 def find_web_dir(config: Config) -> Path | None:
-    candidates = [config.web_dir, Path(__file__).resolve().parents[2] / "web" / "dist"]
+    here = Path(__file__).resolve()
+    # Set explicitly, bundled inside an installed package, or built in a source checkout.
+    candidates = [config.web_dir, here.parent / "web", here.parents[2] / "web" / "dist"]
     return next((p for p in candidates if p and (p / "index.html").is_file()), None)
 
 

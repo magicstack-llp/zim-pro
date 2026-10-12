@@ -1,4 +1,5 @@
-FROM node:24-slim AS web
+# The web app is the same on every architecture, so it is built once on the build machine.
+FROM --platform=$BUILDPLATFORM node:24-slim AS web
 WORKDIR /web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci

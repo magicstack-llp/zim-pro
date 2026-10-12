@@ -2,13 +2,13 @@ from pathlib import Path
 
 import pytest
 
-from kiwix_updater.catalog import opds
-from kiwix_updater.catalog.updates import book_updates
-from kiwix_updater.db import Database
-from kiwix_updater.downloads import metalink
-from kiwix_updater.downloads.engine import Bitmap
-from kiwix_updater.library.article import resolve_link
-from kiwix_updater.library.naming import category_of, split_filename
+from zim_pro.catalog import opds
+from zim_pro.catalog.updates import book_updates
+from zim_pro.db import Database
+from zim_pro.downloads import metalink
+from zim_pro.downloads.engine import Bitmap
+from zim_pro.library.article import resolve_link
+from zim_pro.library.naming import category_of, split_filename
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -140,13 +140,13 @@ def test_opds_parse_and_update_matching():
     ],
 )
 def test_ai_small_talk(message, expected):
-    from kiwix_updater.ai import is_small_talk
+    from zim_pro.ai import is_small_talk
 
     assert is_small_talk(message) is expected
 
 
 def test_ai_chat_prompt_has_no_sources_block():
-    from kiwix_updater.ai import build_messages
+    from zim_pro.ai import build_messages
 
     chat = build_messages("hi", [], None)
     assert chat[-1]["content"] == "hi" and "library" in chat[0]["content"]
@@ -154,7 +154,7 @@ def test_ai_chat_prompt_has_no_sources_block():
 
 
 def test_ai_single_provider_is_migrated():
-    from kiwix_updater import providers
+    from zim_pro import providers
 
     db = Database(":memory:")
     for key, value in (
@@ -174,7 +174,7 @@ def test_ai_single_provider_is_migrated():
 
 
 def test_ai_citation_shapes():
-    from kiwix_updater.providers import _citations, _wav
+    from zim_pro.providers import _citations, _wav
 
     perplexity = {"citations": ["https://a.example/1"], "search_results": []}
     assert _citations(perplexity, {}) == [{"url": "https://a.example/1", "title": ""}]
@@ -186,8 +186,8 @@ def test_ai_citation_shapes():
 
 
 def test_ai_web_fallback_decision_and_numbering():
-    from kiwix_updater.ai import Source, library_is_enough, web_sources
-    from kiwix_updater.api.ai import _number_citations
+    from zim_pro.ai import Source, library_is_enough, web_sources
+    from zim_pro.api.ai import _number_citations
 
     weak = Source(1, "library", "Water", "…", coverage=0.2)
     strong = Source(2, "library", "Water purification", "…", coverage=0.8)
@@ -210,7 +210,7 @@ def test_ai_web_fallback_decision_and_numbering():
 
 
 def test_ai_prompts_carry_formatting_rules_and_user_instructions():
-    from kiwix_updater.ai import Source, build_messages, web_messages
+    from zim_pro.ai import Source, build_messages, web_messages
 
     cited = build_messages("q", [], [Source(1, "library", "T", "x")], "Answer in Hindi.")[0][
         "content"
@@ -224,7 +224,7 @@ def test_ai_prompts_carry_formatting_rules_and_user_instructions():
 
 
 def _split_stream(chunks):
-    from kiwix_updater.providers import ReasoningSplitter
+    from zim_pro.providers import ReasoningSplitter
 
     splitter, reasoning, answer, retracted = ReasoningSplitter(), "", "", 0
     for chunk in chunks:
@@ -253,7 +253,7 @@ def test_reasoning_is_split_from_the_answer(tag):
 
 
 def test_reasoning_edge_cases():
-    from kiwix_updater.providers import split_reasoning
+    from zim_pro.providers import split_reasoning
 
     assert _split_stream(["Plain answer with a < b and <b>bold</b>."]) == (
         "",
@@ -275,7 +275,7 @@ def test_reasoning_edge_cases():
 
 
 def test_free_providers_are_seeded_once():
-    from kiwix_updater import providers
+    from zim_pro import providers
 
     db = Database(":memory:")
     providers.seed_free_providers(db)
@@ -294,7 +294,7 @@ def test_free_providers_are_seeded_once():
 
 
 def test_seeding_keeps_an_existing_default():
-    from kiwix_updater import providers
+    from zim_pro import providers
 
     db = Database(":memory:")
     mine = providers.save_provider(
@@ -307,7 +307,7 @@ def test_seeding_keeps_an_existing_default():
 
 
 def test_free_model_lists_are_filtered():
-    from kiwix_updater.providers import Provider, usable_models
+    from zim_pro.providers import Provider, usable_models
 
     kilo = Provider("k", "Kilo", "kilo", "https://api.kilo.ai/api/gateway/v1", "")
     listed = [
@@ -345,7 +345,7 @@ BOOK_IDS = {b["id"] for b in BOOKS}
 
 
 def test_catalog_folds_devdocs_into_one_line():
-    from kiwix_updater.retrieval import catalog
+    from zim_pro.retrieval import catalog
 
     text = catalog(BOOKS)
     assert "wikipedia_en_all_maxi — Wikipedia: The free encyclopedia" in text
@@ -353,7 +353,7 @@ def test_catalog_folds_devdocs_into_one_line():
 
 
 def test_parse_plan_reads_queries_keywords_and_books():
-    from kiwix_updater.retrieval import parse_plan
+    from zim_pro.retrieval import parse_plan
 
     reply = (
         "<thought>the user wants water safety</thought>"
@@ -369,7 +369,7 @@ def test_parse_plan_reads_queries_keywords_and_books():
 
 
 def test_parse_plan_tolerates_other_shapes():
-    from kiwix_updater.retrieval import parse_plan
+    from zim_pro.retrieval import parse_plan
 
     assert not parse_plan("NONE", BOOK_IDS) and not parse_plan(" none. ", BOOK_IDS)
     # No headers at all: every line is a query.
@@ -385,8 +385,8 @@ def test_parse_plan_tolerates_other_shapes():
 
 
 def test_plan_locally_and_history():
-    from kiwix_updater.ai import clean_history
-    from kiwix_updater.retrieval import plan_locally
+    from zim_pro.ai import clean_history
+    from zim_pro.retrieval import plan_locally
 
     assert not plan_locally("hi", [])
     plan = plan_locally("How do I purify water in an emergency?", [])
@@ -403,7 +403,7 @@ def test_plan_locally_and_history():
 
 
 def test_books_are_routed_by_name_and_chosen():
-    from kiwix_updater.retrieval import MAX_FOCUS_BOOKS, Plan, choose_focus, route_books
+    from zim_pro.retrieval import MAX_FOCUS_BOOKS, Plan, choose_focus, route_books
 
     assert route_books(["python", "reverse list"], BOOKS) == ["devdocs_en_python"]
     assert route_books(["ubuntu", "disk space"], BOOKS) == ["askubuntu.com_en_all"]
@@ -428,7 +428,7 @@ def test_books_are_routed_by_name_and_chosen():
 
 
 def test_passages_keep_intro_and_score_keywords():
-    from kiwix_updater.retrieval import _passages
+    from zim_pro.retrieval import _passages
 
     intro = "Water purification is the process of removing contaminants from water for drinking."
     filler = "\n\n".join(
@@ -462,7 +462,7 @@ class _FakeSearch:
 def test_search_fuses_results_across_queries(monkeypatch):
     from types import SimpleNamespace
 
-    from kiwix_updater import retrieval
+    from zim_pro import retrieval
 
     table = {
         ("/w.zim", "water purification"): ["Water purification", "Water", "Purification rite"],
@@ -491,7 +491,7 @@ def test_search_fuses_results_across_queries(monkeypatch):
 
 
 def test_long_pages_do_not_win_on_scattered_words():
-    from kiwix_updater.retrieval import _passages
+    from zim_pro.retrieval import _passages
 
     terms = {"ubuntu", "disk", "space", "free"}
     focused = (
@@ -509,7 +509,7 @@ def test_long_pages_do_not_win_on_scattered_words():
 
 
 def test_keywords_are_tied_to_the_subject():
-    from kiwix_updater.retrieval import KEYWORD_WEIGHT, Plan, search_list
+    from zim_pro.retrieval import KEYWORD_WEIGHT, Plan, search_list
 
     plan = Plan(
         queries=["water purification", "boiling water", "emergency water"],
@@ -542,8 +542,8 @@ is licensed under Creative Commons.</div>
 
 
 def test_markdown_for_a_model_keeps_only_the_prose():
-    from kiwix_updater.library.article import to_markdown
-    from kiwix_updater.library.reader import Article
+    from zim_pro.library.article import to_markdown
+    from zim_pro.library.reader import Article
 
     text = to_markdown(Article("A/Solar_still", "Solar still", "text/html", WIKI_PAGE))
     assert text.startswith("# Solar still\n\nA **solar still** distills water using the sun.")
@@ -557,8 +557,8 @@ def test_markdown_for_a_model_keeps_only_the_prose():
 
 
 def test_markdown_page_links_to_other_markdown_pages():
-    from kiwix_updater.library.article import to_markdown
-    from kiwix_updater.library.reader import Article
+    from zim_pro.library.article import to_markdown
+    from zim_pro.library.reader import Article
 
     article = Article("A/Solar_still", "Solar still", "text/html", WIKI_PAGE)
     text = to_markdown(article, "wikipedia_en_all")
@@ -570,7 +570,7 @@ def test_markdown_page_links_to_other_markdown_pages():
 
 
 def test_passages_name_their_section():
-    from kiwix_updater.retrieval import _passages
+    from zim_pro.retrieval import _passages
 
     intro = "A solar still purifies water with the heat of the sun and nothing else at all."
     body = "A pit still is dug in the ground and covered with a sheet of clear plastic film."
@@ -590,8 +590,8 @@ MEDIA_PAGE = b"""<html><body>
 
 
 def test_media_lists_pictures_and_videos_but_not_decoration():
-    from kiwix_updater.library.article import media
-    from kiwix_updater.library.reader import Article
+    from zim_pro.library.article import media
+    from zim_pro.library.reader import Article
 
     found = media(Article("A/Solar_still", "Solar still", "text/html", MEDIA_PAGE), "wiki")
     assert found == [
@@ -606,8 +606,8 @@ def test_media_lists_pictures_and_videos_but_not_decoration():
 
 
 def test_markdown_page_keeps_pictures_and_a_model_gets_none():
-    from kiwix_updater.library.article import to_markdown
-    from kiwix_updater.library.reader import Article
+    from zim_pro.library.article import to_markdown
+    from zim_pro.library.reader import Article
 
     article = Article("A/Solar_still", "Solar still", "text/html", MEDIA_PAGE)
     page = to_markdown(article, "wiki")

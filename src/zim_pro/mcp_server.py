@@ -120,7 +120,9 @@ def build_mcp(ctx: Context) -> MCPServer:
             text = to_markdown(article)
             start = max(0, offset)
             end = min(len(text), start + max(500, min(max_chars, 100_000)))
-            header = f"# {article.title or article.path}\n(book: {book}, path: {article.path}, "
+            # The Markdown opens with the article's title; name it here only on later pages.
+            header = f"# {article.title or article.path}\n" if start else ""
+            header += f"(book: {book}, path: {article.path}, "
             header += f"characters {start}-{end} of {len(text)})\n\n"
             footer = ""
             if end < len(text):

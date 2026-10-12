@@ -8,3 +8,5 @@ web/dist/
 state/
 *.part
 .env
+src/zim_pro/web/
+dist/

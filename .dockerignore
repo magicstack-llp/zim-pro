@@ -5,3 +5,6 @@ web/dist
 state
 tests
 **/__pycache__
+dist
+src/zim_pro/web
+.github

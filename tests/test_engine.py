@@ -5,8 +5,8 @@ import os
 import httpx
 import pytest
 
-from kiwix_updater.downloads.engine import Download, DownloadError
-from kiwix_updater.downloads.metalink import Metalink
+from zim_pro.downloads.engine import Download, DownloadError
+from zim_pro.downloads.metalink import Metalink
 
 PIECE = 64 * 1024
 
@@ -47,7 +47,7 @@ def client_for(routes: dict[str, Mirror]) -> httpx.AsyncClient:
 def fast_retries(monkeypatch):
     real_sleep = asyncio.sleep
     monkeypatch.setattr(asyncio, "sleep", lambda _seconds: real_sleep(0))
-    monkeypatch.setattr("kiwix_updater.downloads.engine.SEGMENT_BYTES", 4 * PIECE)
+    monkeypatch.setattr("zim_pro.downloads.engine.SEGMENT_BYTES", 4 * PIECE)
 
 
 async def test_downloads_and_verifies(tmp_path):
