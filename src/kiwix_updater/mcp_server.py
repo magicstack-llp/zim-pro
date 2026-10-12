@@ -27,6 +27,7 @@ def build_mcp(ctx: Context) -> MCPServer:
             "id": book["id"],
             "title": book["title"],
             "description": book["description"],
+            "category": book["category"],
             "language": book["language"],
             "date": book["date"],
             "articles": book["article_count"],

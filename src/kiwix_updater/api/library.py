@@ -14,13 +14,15 @@ router = APIRouter(prefix="/api")
 
 BOOK_COLUMNS = (
     "id, filename, size, name, flavour, title, description, language, date, uuid, creator, "
-    "publisher, tags, article_count, media_count, has_ftindex, has_illustration, policy, error"
+    "publisher, tags, category, article_count, media_count, has_ftindex, has_illustration, policy, "
+    "error"
 )
 
 
 @router.get("/status")
 def status(ctx: Context = Depends(get_context)) -> dict[str, Any]:
     usage = shutil.disk_usage(ctx.config.data_dir)
+    settings = ctx.db.get_settings()
     return {
         "books": ctx.db.scalar("SELECT COUNT(*) FROM books"),
         "library_bytes": ctx.db.scalar("SELECT COALESCE(SUM(size), 0) FROM books"),
@@ -30,6 +32,7 @@ def status(ctx: Context = Depends(get_context)) -> dict[str, Any]:
         "catalog_refreshed": ctx.db.get_meta("catalog_refreshed"),
         "catalog_error": ctx.db.get_meta("catalog_error"),
         "auth_required": bool(ctx.config.admin_token),
+        "ai_configured": bool(settings["ai_base_url"] and settings["ai_model"]),
     }
 
 
@@ -100,9 +103,14 @@ def leftovers(ctx: Context = Depends(get_context)) -> list[dict[str, Any]]:
 
 @router.get("/search")
 def search(
-    q: str, book: str = "", start: int = 0, count: int = 20, ctx: Context = Depends(get_context)
+    q: str,
+    book: str = "",
+    category: str = "",
+    start: int = 0,
+    count: int = 20,
+    ctx: Context = Depends(get_context),
 ) -> dict[str, Any]:
-    """Search one book, or every book when ``book`` is empty.
+    """Search one book, or every book (optionally of one category) when ``book`` is empty.
 
     libzim does not expose relevance scores, so results from different books cannot be
     ranked against each other; a cross-book search returns the top hits grouped by book.
@@ -118,9 +126,12 @@ def search(
             raise HTTPException(404, "No such book") from None
         return {"book": book, **zim_search.search_book(archive, q, max(0, start), count)}
     groups = []
-    for row in ctx.db.all(
-        "SELECT id, title, path, has_illustration FROM books WHERE error IS NULL"
-    ):
+    rows = ctx.db.all(
+        "SELECT id, title, path, has_illustration FROM books "
+        "WHERE error IS NULL AND (? = '' OR category = ?)",
+        (category, category),
+    )
+    for row in rows:
         try:
             found = zim_search.search_book(ctx.pool.get(row["path"]), q, 0, 3, snippets=False)
         except Exception:
@@ -147,9 +158,19 @@ def suggest(q: str, book: str, count: int = 8, ctx: Context = Depends(get_contex
     return zim_search.suggest(archive, q, max(1, min(count, 30)))
 
 
+API_KEY_MASK = "••••••••"
+
+
+def _public_settings(ctx: Context) -> dict[str, Any]:
+    """Settings as shown to the browser: the API key itself never leaves the server."""
+    settings = ctx.db.get_settings()
+    settings["ai_api_key"] = API_KEY_MASK if settings["ai_api_key"] else ""
+    return settings
+
+
 @router.get("/settings")
 def get_settings(ctx: Context = Depends(get_context)) -> dict[str, Any]:
-    return ctx.db.get_settings()
+    return _public_settings(ctx)
 
 
 @router.put("/settings", dependencies=[Depends(require_admin)])
@@ -169,7 +190,11 @@ async def put_settings(
             except (TypeError, ValueError):
                 raise HTTPException(422, f"{key} must be a number") from None
         else:
-            clean[key] = str(value)
+            clean[key] = str(value).strip()
+    if clean.get("ai_api_key") == API_KEY_MASK:
+        del clean["ai_api_key"]  # unchanged: the form only ever saw the mask
+    if clean.get("ai_base_url") and not clean["ai_base_url"].startswith(("http://", "https://")):
+        raise HTTPException(422, "The AI server address must start with http:// or https://")
     if clean.get("default_policy", "notify") not in POLICIES:
         raise HTTPException(422, f"default_policy must be one of {', '.join(POLICIES)}")
     for key, low, high in (("max_concurrent_downloads", 1, 8), ("connections_per_file", 1, 16)):
@@ -179,4 +204,4 @@ async def put_settings(
         clean["catalog_refresh_hours"] = max(1, clean["catalog_refresh_hours"])
     ctx.db.set_settings(clean)
     ctx.downloads._wake.set()
-    return ctx.db.get_settings()
+    return _public_settings(ctx)

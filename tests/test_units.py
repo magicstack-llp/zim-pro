@@ -8,7 +8,7 @@ from kiwix_updater.db import Database
 from kiwix_updater.downloads import metalink
 from kiwix_updater.downloads.engine import Bitmap
 from kiwix_updater.library.article import resolve_link
-from kiwix_updater.library.naming import split_filename
+from kiwix_updater.library.naming import category_of, split_filename
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -22,11 +22,28 @@ FIXTURES = Path(__file__).parent / "fixtures"
             "https://x.org/zim/devdocs/devdocs_en_bash_2026-10.zim.meta4",
             ("devdocs_en_bash", "2026-10"),
         ),
+        ("alexandria.dk_en_all_2026-09a.zim", ("alexandria.dk_en_all", "2026-09")),
         ("custom.zim", ("custom", "")),
     ],
 )
 def test_split_filename(filename, expected):
     assert split_filename(filename) == expected
+
+
+@pytest.mark.parametrize(
+    ("book_id", "tags", "expected"),
+    [
+        ("wikipedia_en_all_maxi", "wikipedia;_category:wikipedia;_ftindex:yes", "wikipedia"),
+        ("100r.co_en_all", "preppers;_ftindex:yes;_category:other", "other"),
+        ("devdocs_en_bash", "devdocs;bash", "devdocs"),
+        ("askubuntu.com_en_all", "", "stack_exchange"),
+        ("health.stackexchange.com_en_all", "", "stack_exchange"),
+        ("ifixit_en_all", "", "iFixit"),
+        ("archlinux_en_all_maxi", "Linux distro;archlinux", "other"),
+    ],
+)
+def test_category_of(book_id, tags, expected):
+    assert category_of(book_id, tags) == expected
 
 
 def test_metalink_parse():
@@ -41,7 +58,10 @@ def test_metalink_parse():
 
 
 def test_metalink_rejects_missing_mirrors():
-    xml = b'<metalink xmlns="urn:ietf:params:xml:ns:metalink"><file name="a"><size>5</size></file></metalink>'
+    xml = (
+        b'<metalink xmlns="urn:ietf:params:xml:ns:metalink">'
+        b'<file name="a"><size>5</size></file></metalink>'
+    )
     with pytest.raises(ValueError):
         metalink.parse(xml)
 
@@ -101,3 +121,60 @@ def test_opds_parse_and_update_matching():
     assert status["devdocs_en_bash"]["latest"]["uuid"] == entry["uuid"]
     assert status["gone_en_all"]["status"] == "unpublished"
     assert status["renamed"]["status"] == "current"  # matched by Name metadata, same uuid
+
+
+def test_ai_parse_queries():
+    from kiwix_updater.ai import keywords, parse_queries
+
+    reply = (
+        "<think>hmm, water</think>\nHere are the queries:\n"
+        '1. "water purification methods"\n- How to filter water\n'
+    )
+    assert parse_queries(reply) == ["water purification methods", "filter water"]
+    assert parse_queries("") == []
+    assert keywords("How do I purify the water?") == ["purify", "water"]
+
+
+def test_ai_passages_keep_intro_and_best_match():
+    from kiwix_updater.ai import _passages
+
+    intro = "Water purification is the process of removing contaminants from water for drinking."
+    filler = "\n\n".join(
+        f"Paragraph {i} discusses unrelated history of the region at length." for i in range(80)
+    )
+    target = "Boiling is the simplest method: a rolling boil for one minute kills most pathogens."
+    coverage, excerpt = _passages(
+        f"{intro}\n\n{filler}\n\n{target}", {"boiling", "pathogens", "chlorine"}
+    )
+    assert excerpt.startswith(intro) and target in excerpt
+    assert len(excerpt) < 3000 and coverage == pytest.approx(2 / 3)
+
+
+@pytest.mark.parametrize(
+    ("message", "expected"),
+    [
+        ("hi", True),
+        ("Hello!", True),
+        ("hey there :)", True),
+        ("Thanks a lot!", True),
+        ("good morning", True),
+        ("how are you?", True),
+        ("ok", True),
+        ("hi, how do I purify water?", False),
+        ("hello world in rust", False),
+        ("what is a kernel", False),
+        ("thanks, and what about chlorine?", False),
+    ],
+)
+def test_ai_small_talk(message, expected):
+    from kiwix_updater.ai import is_small_talk
+
+    assert is_small_talk(message) is expected
+
+
+def test_ai_chat_prompt_has_no_sources_block():
+    from kiwix_updater.ai import build_messages
+
+    chat = build_messages("hi", [], None)
+    assert chat[-1]["content"] == "hi" and "library" in chat[0]["content"]
+    assert "found nothing relevant" in build_messages("x", [], [])[-1]["content"]

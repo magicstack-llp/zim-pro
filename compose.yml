@@ -1,0 +1,18 @@
+services:
+  kiwix:
+    build: .
+    image: kiwix-updater
+    container_name: kiwix-updater
+    restart: unless-stopped
+    user: "1000:1000"
+    ports:
+      - "8083:8080"
+    extra_hosts:
+      # Lets Ask AI reach a model server on this machine (Ollama, LM Studio, llama.cpp)
+      # at http://host.docker.internal:<port>/v1
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /mnt/storage/Media/Kiwix/data:/data
+      - ./state:/state
+    # environment:
+    #   KIWIX_ADMIN_TOKEN: change-me   # required for changes and /mcp when set

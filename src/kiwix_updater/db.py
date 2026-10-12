@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS books (
     has_ftindex INTEGER NOT NULL DEFAULT 0,
     has_illustration INTEGER NOT NULL DEFAULT 0,
     policy TEXT NOT NULL DEFAULT 'notify',
-    error TEXT
+    error TEXT,
+    category TEXT NOT NULL DEFAULT 'other'
 );
 CREATE TABLE IF NOT EXISTS shadowed (
     path TEXT PRIMARY KEY,
@@ -88,6 +89,23 @@ CREATE TABLE IF NOT EXISTS history (
     result TEXT NOT NULL,
     message TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS chats (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    created REAL NOT NULL DEFAULT (unixepoch('subsec')),
+    updated REAL NOT NULL DEFAULT (unixepoch('subsec'))
+);
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    chat_id TEXT NOT NULL REFERENCES chats (id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL DEFAULT '',
+    sources TEXT,
+    queries TEXT,
+    error TEXT,
+    created REAL NOT NULL DEFAULT (unixepoch('subsec'))
+);
+CREATE INDEX IF NOT EXISTS chat_messages_chat ON chat_messages (chat_id, id);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -101,12 +119,28 @@ class Database:
     def __init__(self, path: Path | str):
         if path != ":memory:":
             Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self._conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
+        try:
+            self._conn = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
+        except sqlite3.OperationalError as exc:
+            raise SystemExit(
+                f"Cannot open the database at {path}: {exc}. The state directory must be "
+                "writable by the user this server runs as."
+            ) from exc
         self._conn.row_factory = sqlite3.Row
         self._lock = threading.RLock()
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA synchronous=NORMAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
         self._conn.executescript(SCHEMA)
+        self._migrate()
+
+    def _migrate(self) -> None:
+        """Add columns introduced after a database was first created."""
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(books)")}
+        if "category" not in columns:
+            self._conn.execute(
+                "ALTER TABLE books ADD COLUMN category TEXT NOT NULL DEFAULT 'other'"
+            )
 
     def execute(self, sql: str, params: Iterable[Any] | dict[str, Any] = ()) -> sqlite3.Cursor:
         with self._lock:

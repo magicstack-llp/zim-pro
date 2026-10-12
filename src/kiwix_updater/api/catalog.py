@@ -12,9 +12,12 @@ router = APIRouter(prefix="/api")
 
 SORTS = {
     "title": "title COLLATE NOCASE",
+    "title_desc": "title COLLATE NOCASE DESC",
     "newest": "issued DESC",
+    "oldest": "issued ASC",
     "size": "size DESC",
     "smallest": "size ASC",
+    "articles": "article_count DESC",
 }
 _PUBLIC_BOOK = [c.strip() for c in BOOK_COLUMNS.split(",")]
 

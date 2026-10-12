@@ -8,7 +8,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import mcp_server, scheduler
-from .api import catalog, content, downloads, library
+from .api import ai, catalog, content, downloads, library
 from .config import Config
 from .context import Context
 from .db import Database
@@ -64,7 +64,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 return JSONResponse({"detail": "admin token required"}, 401)
         return await call_next(request)
 
-    for module in (content, library, catalog, downloads):
+    for module in (content, library, catalog, downloads, ai):
         app.include_router(module.router)
     app.router.routes.extend(mcp_app.routes)
 

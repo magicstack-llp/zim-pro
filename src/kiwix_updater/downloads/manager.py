@@ -246,8 +246,12 @@ class DownloadManager:
                 if download is None:
                     continue
                 elapsed = now - active.last_time
-                rate = (download.bytes_done - active.last_bytes) / elapsed if elapsed > 0 else 0
+                rate = (
+                    max(0, download.bytes_done - active.last_bytes) / elapsed if elapsed > 0 else 0
+                )
                 active.speed = rate if active.speed == 0 else 0.7 * active.speed + 0.3 * rate
+                if active.speed < 1:
+                    active.speed = 0.0  # the average decays forever; call a stall a stall
                 active.last_bytes, active.last_time = download.bytes_done, now
                 if now - active.last_persist >= PERSIST_SECONDS:
                     active.last_persist = now

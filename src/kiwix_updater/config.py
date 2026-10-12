@@ -30,6 +30,11 @@ DEFAULT_SETTINGS: dict[str, int | bool | str] = {
     "default_policy": "notify",
     "keep_old_versions": False,
     "mcp_allow_writes": False,
+    # Ask AI: any server that speaks the OpenAI chat completions API.
+    "ai_base_url": "",
+    "ai_api_key": "",
+    "ai_model": "",
+    "ai_max_sources": 6,
 }
 
 POLICIES = ("auto", "notify", "pinned")

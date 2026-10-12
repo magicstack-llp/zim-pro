@@ -8,7 +8,7 @@ from libzim.reader import Archive
 
 from ..db import Database
 from .archive_pool import ArchivePool
-from .naming import split_filename
+from .naming import category_of, split_filename
 
 log = logging.getLogger(__name__)
 
@@ -50,7 +50,7 @@ def read_book(path: Path) -> dict[str, Any]:
         archive = Archive(str(path))
         row.update(
             name=_meta(archive, "Name") or stem,
-            flavour=_meta(archive, "Flavour"),
+            flavour=_meta(archive, "Flavour").lstrip("_"),
             title=_meta(archive, "Title") or stem,
             description=_meta(archive, "Description"),
             language=_meta(archive, "Language"),
@@ -144,6 +144,12 @@ class Scanner:
                     "VALUES (?, ?, ?, ?)",
                     (other["path"], book_id, other["size"], other["date"]),
                 )
+
+        # Derived from the id and tags, so recompute for every book rather than only new files.
+        for row in self.db.all("SELECT id, tags, category FROM books"):
+            category = category_of(row["id"], row["tags"])
+            if category != row["category"]:
+                self.db.execute("UPDATE books SET category = ? WHERE id = ?", (category, row["id"]))
 
         removed = 0
         for row in known.values():

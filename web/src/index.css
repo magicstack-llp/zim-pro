@@ -1,0 +1,88 @@
+@import "tailwindcss";
+
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --color-brand-50: #f0fdfa;
+  --color-brand-100: #ccfbf1;
+  --color-brand-400: #2dd4bf;
+  --color-brand-500: #14b8a6;
+  --color-brand-600: #0d9488;
+  --color-brand-700: #0f766e;
+  --color-brand-900: #134e4a;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-1.5 rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm font-medium whitespace-nowrap text-zinc-800 transition hover:bg-zinc-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:hover:bg-zinc-700;
+  }
+  .btn-primary {
+    @apply border-brand-700 bg-brand-700 hover:bg-brand-600 dark:border-brand-600 dark:bg-brand-600 dark:hover:bg-brand-500 text-white dark:text-white;
+  }
+  .btn-danger {
+    @apply border-red-300 text-red-700 hover:bg-red-50 dark:border-red-900 dark:text-red-400 dark:hover:bg-red-950;
+  }
+  .input {
+    @apply focus:border-brand-500 focus:ring-brand-500/30 w-full rounded-lg border border-zinc-300 bg-white px-3 py-1.5 text-sm outline-none focus:ring-2 dark:border-zinc-700 dark:bg-zinc-900;
+  }
+  .muted {
+    @apply text-zinc-500 dark:text-zinc-400;
+  }
+  .badge {
+    @apply inline-flex items-center rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300;
+  }
+  .answer :where(p, ul, ol, pre, blockquote, table) {
+    @apply mb-3;
+  }
+  .answer :where(h1, h2, h3, h4) {
+    @apply mt-5 mb-2 font-semibold;
+  }
+  .answer :where(h1, h2) {
+    @apply text-lg;
+  }
+  .answer :where(ul) {
+    @apply list-disc pl-5;
+  }
+  .answer :where(ol) {
+    @apply list-decimal pl-5;
+  }
+  .answer :where(li) {
+    @apply mb-1;
+  }
+  .answer :where(a) {
+    @apply text-brand-700 dark:text-brand-400 underline;
+  }
+  .answer :where(code) {
+    @apply rounded bg-zinc-100 px-1 py-0.5 text-[0.9em] dark:bg-zinc-800;
+  }
+  .answer :where(pre) {
+    @apply overflow-x-auto rounded-lg bg-zinc-100 p-3 text-sm dark:bg-zinc-800;
+  }
+  .answer :where(pre code) {
+    @apply bg-transparent p-0;
+  }
+  .answer :where(blockquote) {
+    @apply border-l-2 border-zinc-300 pl-3 text-zinc-600 dark:border-zinc-700 dark:text-zinc-300;
+  }
+  .answer > :last-child {
+    @apply mb-0;
+  }
+  .th {
+    @apply px-3 py-2 text-left text-xs font-semibold tracking-wide text-zinc-500 uppercase dark:text-zinc-400;
+  }
+  .td {
+    @apply px-3 py-2.5 align-middle text-sm;
+  }
+}
