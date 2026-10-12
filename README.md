@@ -22,6 +22,39 @@ on your own machine.
 
 It replaces `kiwix-serve`.
 
+## Screenshots
+
+<p align="center">
+  <a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask.png" alt="Ask AI: an answer written from the library, with numbered citations and the sources beside it" width="100%"></a>
+  <br><sub>Ask AI: an answer written from your books, with citations and the sources beside it</sub>
+</p>
+
+<table>
+  <tr>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask-media.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask-media.png" alt="Pictures and videos from the sources, under the answer" width="100%"></a><br><sub>Pictures and videos from the sources, under the answer</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/search.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/search.png" alt="Search across every book, with search history" width="100%"></a><br><sub>Search across every book, with search history</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/library.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/library.png" alt="The library" width="100%"></a><br><sub>The library</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/markdown.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/markdown.png" alt="Any article as Markdown, with its pictures" width="100%"></a><br><sub>Any article as Markdown, with its pictures</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/updates.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/updates.png" alt="Updates from the Kiwix catalog" width="100%"></a><br><sub>Updates from the Kiwix catalog</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/settings.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/settings.png" alt="Settings: downloads, updates and AI providers" width="100%"></a><br><sub>Settings: downloads, updates and AI providers</sub></td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td width="60%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask-dark.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask-dark.png" alt="The dark theme" width="100%"></a><br><sub>The dark theme</sub></td>
+    <td width="20%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/phone-ask.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/phone-ask.png" alt="Ask AI on a phone" width="100%"></a><br><sub>On a phone</sub></td>
+    <td width="20%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/phone-library.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/phone-library.png" alt="The library on a phone" width="100%"></a><br><sub>Library on a phone</sub></td>
+  </tr>
+</table>
+
+The screenshots are in [`screenshots/`](screenshots). The articles and pictures shown in them
+come from Wikipedia and Appropedia, which publish them under Creative Commons licences.
+
 ## What it does
 
 - **Read** – a reader for every book, with in-book search and title suggestions. Entries are
