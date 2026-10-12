@@ -55,13 +55,12 @@ export default function Library() {
         }
       >
         <input
-          className="input w-56"
+          className="input w-full sm:w-56"
           placeholder="Filter books…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
-          autoFocus
         />
-        <select className="input w-auto" value={lang} onChange={(e) => setLang(e.target.value)}>
+        <select className="input w-auto flex-1 sm:flex-none" value={lang} onChange={(e) => setLang(e.target.value)} aria-label="Language">
           <option value="">All languages</option>
           {languages.map((code) => (
             <option key={code} value={code}>
@@ -69,7 +68,7 @@ export default function Library() {
             </option>
           ))}
         </select>
-        <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort by">
+        <select className="input w-auto flex-1 sm:flex-none" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort by">
           <option value="title">Title A–Z</option>
           <option value="title-desc">Title Z–A</option>
           <option value="date">Newest first</option>
@@ -98,7 +97,7 @@ export default function Library() {
           <Link
             key={book.id}
             to={readUrl(book.id)}
-            className="card hover:border-brand-500 flex gap-3 p-3.5 transition hover:shadow-sm"
+            className="card hover:border-brand-500 flex gap-3 p-3.5 transition hover:shadow-sm active:scale-[0.99]"
           >
             <BookIcon src={bookIcon(book)} title={book.title} size={44} />
             <div className="min-w-0 flex-1">

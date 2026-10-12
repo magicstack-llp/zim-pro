@@ -46,17 +46,40 @@ def random_path(archive: Archive) -> str | None:
     return entry.path
 
 
-_DROP = "script, style, noscript, template, svg, nav, footer, header, form, iframe, link, meta"
+_DROP = (
+    "script, style, noscript, template, svg, nav, footer, header, form, iframe, link, meta, "
+    "button, input, select, textarea, dialog"
+)
+# Furniture around the text: navigation boxes, edit links, citation markers and reference
+# lists, licence footers, and
+# the vote counts and user cards of Q&A sites. `sup.reference` rather than `.reference`:
+# Sphinx marks every ordinary cross-reference link with that class.
 _DROP_CLASSES = (
-    ".navbox, .mw-editsection, .reference, .reflist, .noprint, .metadata, .sidebar, "
-    ".mw-jump-link, .toc, #toc, .hatnote, .thumbcaption .magnify, .infobox-navbar"
+    ".navbox, .mw-editsection, sup.reference, .mw-ref, .reflist, .references, "
+    ".mw-references-wrap, .noprint, .metadata, .sidebar, .mw-jump-link, .toc, #toc, "
+    ".hatnote, .infobox-navbar, .mw-empty-elt, "
+    ".catlinks, .printfooter, ._attribution, .headerlink, .s-user-card, .comment-actions, "
+    ".js-vote-count, .nav-links, .actionbar-portal, .footer-stat, [aria-hidden=true]"
 )
 
 
-def clean_tree(html: bytes | str, keep_references: bool = False) -> HTMLParser:
-    """Parse article HTML and drop everything that is not readable content."""
+CAPTIONS = ".thumbcaption, figcaption, .gallerytext"
+
+
+def clean_tree(
+    html: bytes | str, keep_references: bool = False, keep_captions: bool = False
+) -> HTMLParser:
+    """Parse article HTML and drop everything that is not readable content.
+
+    Picture captions go too unless ``keep_captions``: without the picture they are stray
+    sentences.
+    """
     tree = HTMLParser(html)
-    selectors = [_DROP, _DROP_CLASSES if not keep_references else ""]
+    selectors = [
+        _DROP,
+        _DROP_CLASSES if not keep_references else "",
+        CAPTIONS if not keep_captions else "",
+    ]
     for selector in filter(None, selectors):
         for node in tree.css(selector):
             node.decompose()

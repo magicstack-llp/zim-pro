@@ -4,6 +4,7 @@ import { readUrl, type Book } from "../lib/api";
 import { Combobox } from "../Combobox";
 import { categoryLabel, count } from "../lib/format";
 import { useData } from "../lib/live";
+import { useTouch } from "../lib/viewport";
 import { bookOptions, ScopeBar } from "../Scope";
 import { BookIcon, Empty, ErrorNote } from "../ui";
 import { bookIcon } from "./Library";
@@ -32,6 +33,7 @@ interface Results {
 const PAGE = 20;
 
 export default function Search() {
+  const touch = useTouch();
   const [params, setParams] = useSearchParams();
   const q = params.get("q") ?? "";
   const book = params.get("book") ?? "";
@@ -88,7 +90,8 @@ export default function Search() {
           aria-label="Search"
           value={text}
           onChange={(e) => setText(e.target.value)}
-          autoFocus
+          autoFocus={!touch}
+          enterKeyHint="search"
         />
         <div className="shrink-0 border-l border-zinc-200 pl-3 dark:border-zinc-700">
           <Combobox
@@ -107,7 +110,7 @@ export default function Search() {
 
   if (!q) {
     return (
-      <div className="mx-auto flex min-h-[70vh] max-w-2xl flex-col items-center justify-center gap-6 pb-24">
+      <div className="mx-auto flex min-h-[calc(100dvh-12rem)] max-w-2xl flex-col items-center justify-center gap-6 pb-10 kb:min-h-0 kb:justify-start kb:pt-2 sm:min-h-[70vh] sm:pb-24">
         <h1 className="flex items-center gap-3 text-4xl font-semibold tracking-tight sm:text-5xl">
           <span className="bg-brand-700 flex h-12 w-12 items-center justify-center rounded-2xl text-2xl font-bold text-white sm:h-14 sm:w-14">
             K
@@ -128,7 +131,7 @@ export default function Search() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      <div className="sticky top-12 z-10 -mx-4 bg-zinc-50 px-4 pt-1 pb-3 md:top-0 dark:bg-zinc-950">
+      <div className="sticky top-0 z-10 -mx-4 bg-zinc-50 px-4 pt-1 pb-3 dark:bg-zinc-950">
         {form(false)}
         <div className="mt-3">
           {scopeBar}
@@ -156,14 +159,14 @@ export default function Search() {
                   <h2 className="min-w-0 flex-1 truncate font-medium">
                     {group.title} <span className="muted text-xs font-normal">{group.book}</span>
                   </h2>
-                  <button className="text-brand-600 text-sm whitespace-nowrap hover:underline" onClick={() => update({ book: group.book })}>
+                  <button className="text-brand-600 py-1 text-sm whitespace-nowrap hover:underline" onClick={() => update({ book: group.book })}>
                     {group.mode === "fulltext" ? `About ${count(group.total)} results` : `${count(group.total)} title matches`} →
                   </button>
                 </div>
                 <ul className="space-y-0.5">
                   {group.results.map((hit) => (
                     <li key={hit.path}>
-                      <Link className="hover:text-brand-600 block truncate text-sm hover:underline" to={readUrl(group.book, hit.path)}>
+                      <Link className="hover:text-brand-600 block truncate py-1 text-[15px] hover:underline sm:py-0.5 sm:text-sm" to={readUrl(group.book, hit.path)}>
                         {hit.title}
                       </Link>
                     </li>

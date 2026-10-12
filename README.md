@@ -4,6 +4,9 @@ A self-hosted replacement for `kiwix-serve`: browse, read and search a folder of
 keep them updated from the Kiwix catalog, and expose the library to LLM apps over MCP.
 
 - **Reader** – `/content/<book>/<path>` serves ZIM entries (redirects, `Range` for video).
+- **Markdown** – `/markdown/<book>/<path>` gives the same article as Markdown: its text and
+  pictures, with links leading to the Markdown of other articles. The reader's **Markdown**
+  button shows it in place, with a copy button; videos and recordings play there too.
 - **Search** – full text per book, grouped results across all books, title suggestions.
 - **Updates** – compares each local book with `library.kiwix.org` and lists newer releases;
   per-book policy: automatic, ask first, or pinned.
@@ -47,15 +50,58 @@ Download limits, the update schedule and policies are set in the web UI under Se
 
 ## Ask AI
 
-Set the server address, API key and model under Settings → Ask AI. Any server with the
-OpenAI `/chat/completions` API works: OpenAI, OpenRouter, Ollama, LM Studio, llama.cpp, vLLM.
+Add one or more providers under Settings → AI providers, then pick a default model. Any
+server with the OpenAI `/chat/completions` API works: OpenAI, Google Gemini, Perplexity,
+OpenRouter, Groq, Ollama, LM Studio, llama.cpp, vLLM. The model can be switched per message
+in the chat box.
+
+Two providers that need no account or key are added on first start, so Ask AI works straight
+after installing: **OVHcloud AI Endpoints** (Llama 3.3 70B, Qwen, Mistral, gpt-oss; about two
+requests a minute per model) and **Kilo Gateway**'s free models (about 200 requests an hour;
+Kilo may log free-tier prompts for training). Both are rate-limited per IP address and can be
+removed under Settings; a removed one is not added back.
 
 For a model server on the Docker host, use `http://host.docker.internal:<port>/v1` (Ollama:
 `11434`, LM Studio: `1234`), not `localhost`, and make the server listen on all interfaces
 (for Ollama, `OLLAMA_HOST=0.0.0.0`).
 
-Each question is turned into keyword searches by the model, the library is searched, and the
-best passages are sent to the model with the question. Nothing else leaves the machine.
+How a question is answered (see `src/kiwix_updater/retrieval.py`):
+
+1. **Plan.** The model is shown the list of books and returns several short queries from
+   different angles, extra keywords a good article would contain, and the books most likely
+   to help. If it cannot be asked in time, the question's own words are used.
+2. **Search the relevant books in depth** with every query and keyword. These are the model's
+   picks, books named after the subject, and always the main encyclopedia.
+3. **Search every other book lightly** with the main queries.
+4. **Rank.** Articles found by several searches rise (reciprocal rank fusion); the best 24 are
+   read and scored on how much of the subject one passage covers, and only passages that fit
+   are sent to the model with the question.
+
+Articles reach the model as Markdown (`library/article.py`), not HTML: navigation, pictures
+and their captions, citation markers, reference lists, "See also" and "External links"
+sections and licence footers are removed and links are flattened to their text, so the tokens
+go on prose. Each passage is sent under the heading of the section it came from.
+
+The pictures, videos and recordings on each source's page are listed with the source and
+shown as thumbnails under it; they are not sent to the model.
+
+Chats are stored in the database.
+
+Every prompt carries formatting rules, and answers are passed through a repair step before
+they are shown (unclosed code blocks, leaked reasoning, malformed lists, tables and citations),
+since small models often get Markdown wrong. Your own standing instructions can be added
+under Settings → Ask AI.
+
+**Web search** (off by default) is used when the library has no good match, or for every
+question while the globe button in the chat box is on. Either:
+
+- a *search service* (Tavily, Brave, Serper for Google results, or your own SearXNG), whose
+  results are added to the sources for your chat model, or
+- a *searching model* that looks things up itself: Perplexity Sonar, OpenRouter's web add-on,
+  an OpenAI search model, or Gemini with Google Search.
+
+**Read aloud** adds a listen button to answers, using the browser's built-in voice or a
+provider's speech model (OpenAI, Gemini, Groq, or a local `/audio/speech` server).
 
 ## MCP
 
@@ -81,4 +127,5 @@ For a stdio client, run `kiwix-updater mcp` with `KIWIX_DATA_DIR` and `KIWIX_STA
 
 ```sh
 uv run pytest
+(cd web && npm test)
 ```

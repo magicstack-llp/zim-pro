@@ -30,11 +30,25 @@ DEFAULT_SETTINGS: dict[str, int | bool | str] = {
     "default_policy": "notify",
     "keep_old_versions": False,
     "mcp_allow_writes": False,
-    # Ask AI: any server that speaks the OpenAI chat completions API.
-    "ai_base_url": "",
-    "ai_api_key": "",
+    # Ask AI. Providers live in their own table; these pick the defaults among them.
+    "ai_provider": "",
     "ai_model": "",
     "ai_max_sources": 6,
+    # The user's own standing instructions, added to every prompt.
+    "ai_instructions": "",
+    # Internet search for questions the library cannot answer:
+    # "off", "api" (a search service) or "model" (a model that searches by itself).
+    "web_mode": "off",
+    "web_service": "tavily",
+    "web_api_key": "",
+    "web_api_url": "",
+    "web_provider": "",
+    "web_model": "",
+    # Reading answers aloud: "browser" (the browser's own voice), "provider" or "off".
+    "tts_mode": "browser",
+    "tts_provider": "",
+    "tts_model": "",
+    "tts_voice": "",
 }
 
 POLICIES = ("auto", "notify", "pinned")

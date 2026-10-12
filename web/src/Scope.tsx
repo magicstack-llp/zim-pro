@@ -4,7 +4,7 @@ import type { Book } from "./lib/api";
 import { categoryCounts, categoryLabel } from "./lib/format";
 
 const CHIP =
-  "inline-flex max-w-56 items-center gap-1.5 rounded-full border px-3 py-1 text-sm whitespace-nowrap transition";
+  "inline-flex max-w-56 shrink-0 items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-sm whitespace-nowrap transition sm:px-3 sm:py-1";
 const CHIP_OFF =
   "border-zinc-300 bg-white text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:bg-zinc-900 dark:text-zinc-300 dark:hover:bg-zinc-800";
 const CHIP_ON = "border-brand-700 bg-brand-700 dark:border-brand-600 dark:bg-brand-600 text-white";
@@ -53,7 +53,11 @@ export function ScopeBar({
   if (categories.length + (others.length ? 1 : 0) < 2) return null;
 
   return (
-    <div className={`flex flex-wrap gap-1.5 ${center ? "justify-center" : ""}`} role="group" aria-label="Category">
+    <div
+      className={`-mx-4 flex gap-1.5 overflow-x-auto px-4 [scrollbar-width:none] sm:mx-0 sm:flex-wrap sm:overflow-visible sm:px-0 ${center ? "sm:justify-center" : ""}`}
+      role="group"
+      aria-label="Category"
+    >
       <button
         type="button"
         aria-pressed={!category && !book}
@@ -78,7 +82,7 @@ export function ScopeBar({
         <Combobox
           value={otherValue}
           options={otherOptions}
-          placeholder="More"
+          placeholder="Other"
           searchPlaceholder={`Search ${others.length} other books…`}
           align="right"
           up={up}

@@ -1,0 +1,10 @@
+{
+  "name": "Kiwix Library",
+  "short_name": "Library",
+  "description": "Your offline library: read, search and ask.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#fafafa",
+  "theme_color": "#0f766e",
+  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

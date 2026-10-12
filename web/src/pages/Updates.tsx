@@ -116,7 +116,7 @@ export default function Updates() {
           onChange={(e) => setFilter(e.target.value)}
           aria-label="Filter books"
         />
-        <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort by">
+        <select className="input w-auto flex-1 sm:flex-none" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort by">
           <option value="title">Title A–Z</option>
           <option value="title-desc">Title Z–A</option>
           <option value="release">Newest release first</option>
@@ -128,7 +128,7 @@ export default function Updates() {
           Check now
         </button>
         <button
-          className="btn btn-primary"
+          className="btn btn-primary w-full sm:w-auto"
           disabled={busy || pendingBytes === 0}
           onClick={() =>
             run(async () => {
@@ -218,22 +218,43 @@ export default function Updates() {
         <div className="card overflow-x-auto">
           <table className="w-full">
             <thead>
-              <tr className="border-b border-zinc-200 dark:border-zinc-800">
+              <tr className="hidden border-b border-zinc-200 sm:table-row dark:border-zinc-800">
                 <th className="th">Book</th>
                 <th className="th hidden lg:table-cell">{tab === "update" ? "Version" : "Installed"}</th>
                 <th className="th hidden lg:table-cell">Size</th>
-                <th className={`th ${tab === "update" ? "hidden sm:table-cell" : ""}`}>Policy</th>
-                {tab === "update" && <th className="th" />}
+                <th className="th hidden sm:table-cell">Policy</th>
+                {tab === "update" && <th className="th hidden sm:table-cell" />}
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-100 dark:divide-zinc-800">
               {groups[tab].map(({ book, latest, download }) => {
                 const active = download && (live.get(download.id) ?? download);
+                const action = !active ? (
+                  <button
+                    className="btn"
+                    disabled={busy}
+                    onClick={() => run(() => post(`/api/updates/${encodeURIComponent(book.id)}/start`))}
+                  >
+                    Update
+                  </button>
+                ) : active.state === "failed" ? (
+                  <Link to="/downloads" className="text-sm text-red-600 hover:underline dark:text-red-400">
+                    Failed
+                  </Link>
+                ) : (
+                  <Link to="/downloads" className="block w-28 text-left sm:w-36">
+                    <Progress value={active.size ? active.bytes_done / active.size : 0} tone={active.state === "paused" ? "muted" : "brand"} />
+                    <span className="muted mt-1 block text-xs capitalize">
+                      {active.state}
+                      {active.size > 0 && ` · ${Math.floor((active.bytes_done / active.size) * 100)}%`}
+                    </span>
+                  </Link>
+                );
                 return (
                   <tr key={book.id}>
                     <td className="td w-full max-w-0">
-                      <Link to={readUrl(book.id)} className="flex items-center gap-2.5 hover:underline">
-                        <BookIcon src={bookIcon(book)} title={book.title} size={28} />
+                      <Link to={readUrl(book.id)} className="flex items-center gap-3 hover:underline sm:gap-2.5">
+                        <BookIcon src={bookIcon(book)} title={book.title} size={32} />
                         <span className="min-w-0">
                           <span className="block truncate font-medium">{book.title}</span>
                           <span className="muted hidden truncate text-xs lg:block">{book.id}</span>
@@ -243,6 +264,11 @@ export default function Updates() {
                           </span>
                         </span>
                       </Link>
+                      {/* On phones the controls sit under the title, where there is room for both. */}
+                      <div className="mt-2.5 flex items-center justify-between gap-2 pl-11 sm:hidden">
+                        {policySelect(book, "w-auto")}
+                        {tab === "update" && action}
+                      </div>
                     </td>
                     <td className="td hidden whitespace-nowrap lg:table-cell">
                       {book.date.slice(0, 10)}
@@ -258,35 +284,8 @@ export default function Updates() {
                         bytes(book.size)
                       )}
                     </td>
-                    <td className={`td ${tab === "update" ? "hidden sm:table-cell" : ""}`}>{policySelect(book)}</td>
-                    {tab === "update" && (
-                      <td className="td text-right whitespace-nowrap">
-                        <div className="mb-1.5 sm:hidden">{policySelect(book, "w-28")}</div>
-                        {active ? (
-                          active.state === "failed" ? (
-                            <Link to="/downloads" className="text-sm text-red-600 hover:underline dark:text-red-400">
-                              Failed
-                            </Link>
-                          ) : (
-                            <Link to="/downloads" className="block w-24 text-left sm:w-36">
-                              <Progress value={active.size ? active.bytes_done / active.size : 0} tone={active.state === "paused" ? "muted" : "brand"} />
-                              <span className="muted mt-1 block text-xs capitalize">
-                                {active.state}
-                                {active.size > 0 && ` · ${Math.floor((active.bytes_done / active.size) * 100)}%`}
-                              </span>
-                            </Link>
-                          )
-                        ) : (
-                          <button
-                            className="btn w-full sm:w-auto"
-                            disabled={busy}
-                            onClick={() => run(() => post(`/api/updates/${encodeURIComponent(book.id)}/start`))}
-                          >
-                            Update
-                          </button>
-                        )}
-                      </td>
-                    )}
+                    <td className="td hidden sm:table-cell">{policySelect(book)}</td>
+                    {tab === "update" && <td className="td hidden text-right whitespace-nowrap sm:table-cell">{action}</td>}
                   </tr>
                 );
               })}

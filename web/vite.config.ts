@@ -8,7 +8,7 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: Object.fromEntries(
-      ["/api", "/content", "/random", "/mcp"].map((path) => [path, { target: backend }]),
+      ["/api", "/content", "/markdown", "/random", "/mcp"].map((path) => [path, { target: backend }]),
     ),
   },
 });

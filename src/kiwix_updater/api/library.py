@@ -32,7 +32,11 @@ def status(ctx: Context = Depends(get_context)) -> dict[str, Any]:
         "catalog_refreshed": ctx.db.get_meta("catalog_refreshed"),
         "catalog_error": ctx.db.get_meta("catalog_error"),
         "auth_required": bool(ctx.config.admin_token),
-        "ai_configured": bool(settings["ai_base_url"] and settings["ai_model"]),
+        "ai_configured": bool(settings["ai_provider"] and settings["ai_model"]),
+        "ai_provider": settings["ai_provider"],
+        "ai_model": settings["ai_model"],
+        "web_mode": settings["web_mode"],
+        "tts_mode": settings["tts_mode"],
     }
 
 
@@ -158,13 +162,21 @@ def suggest(q: str, book: str, count: int = 8, ctx: Context = Depends(get_contex
     return zim_search.suggest(archive, q, max(1, min(count, 30)))
 
 
-API_KEY_MASK = "••••••••"
+SECRET_MASK = "••••••••"
+SECRET_SETTINGS = ("web_api_key",)
+CHOICES = {
+    "default_policy": POLICIES,
+    "web_mode": ("off", "api", "model"),
+    "web_service": ("tavily", "brave", "serper", "searxng"),
+    "tts_mode": ("browser", "provider", "off"),
+}
 
 
 def _public_settings(ctx: Context) -> dict[str, Any]:
-    """Settings as shown to the browser: the API key itself never leaves the server."""
+    """Settings as shown to the browser: secrets never leave the server."""
     settings = ctx.db.get_settings()
-    settings["ai_api_key"] = API_KEY_MASK if settings["ai_api_key"] else ""
+    for key in SECRET_SETTINGS:
+        settings[key] = SECRET_MASK if settings[key] else ""
     return settings
 
 
@@ -190,13 +202,17 @@ async def put_settings(
             except (TypeError, ValueError):
                 raise HTTPException(422, f"{key} must be a number") from None
         else:
-            clean[key] = str(value).strip()
-    if clean.get("ai_api_key") == API_KEY_MASK:
-        del clean["ai_api_key"]  # unchanged: the form only ever saw the mask
-    if clean.get("ai_base_url") and not clean["ai_base_url"].startswith(("http://", "https://")):
-        raise HTTPException(422, "The AI server address must start with http:// or https://")
-    if clean.get("default_policy", "notify") not in POLICIES:
-        raise HTTPException(422, f"default_policy must be one of {', '.join(POLICIES)}")
+            clean[key] = str(value).strip()[:2000]
+    for key in SECRET_SETTINGS:
+        if clean.get(key) == SECRET_MASK:
+            del clean[key]  # unchanged: the form only ever saw the mask
+    for key, allowed in CHOICES.items():
+        if key in clean and clean[key] not in allowed:
+            raise HTTPException(422, f"{key} must be one of {', '.join(allowed)}")
+    if clean.get("web_api_url") and not clean["web_api_url"].startswith(("http://", "https://")):
+        raise HTTPException(422, "The search server address must start with http:// or https://")
+    if "ai_max_sources" in clean:
+        clean["ai_max_sources"] = max(1, min(12, clean["ai_max_sources"]))
     for key, low, high in (("max_concurrent_downloads", 1, 8), ("connections_per_file", 1, 16)):
         if key in clean:
             clean[key] = max(low, min(high, clean[key]))

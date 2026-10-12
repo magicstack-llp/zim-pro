@@ -122,10 +122,17 @@ export interface Status {
   catalog_refreshed: number | null;
   catalog_error: string | null;
   ai_configured: boolean;
+  ai_provider: string;
+  ai_model: string;
+  web_mode: "off" | "api" | "model";
+  tts_mode: "browser" | "provider" | "off";
 }
 
 export const contentUrl = (bookId: string, path = "") =>
   `/content/${encodeURIComponent(bookId)}/${path.split("/").map(encodeURIComponent).join("/")}`;
+
+export const markdownUrl = (bookId: string, path = "") =>
+  `/markdown/${encodeURIComponent(bookId)}/${path.split("/").map(encodeURIComponent).join("/")}`;
 
 export const readUrl = (bookId: string, path = "") =>
   `/read/${encodeURIComponent(bookId)}/${path.split("/").map(encodeURIComponent).join("/")}`;

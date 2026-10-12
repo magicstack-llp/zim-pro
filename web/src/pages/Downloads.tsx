@@ -63,7 +63,7 @@ export default function Downloads() {
         title="Downloads"
         subtitle={running.length ? `${running.length} active · ${bytes(speed)}/s` : "Nothing is downloading"}
       >
-        <select className="input w-auto" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort by">
+        <select className="input w-auto flex-1 sm:flex-none" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort by">
           <option value="queue">Queue order</option>
           <option value="recent">Most recent first</option>
           <option value="progress">Most complete first</option>

@@ -61,13 +61,13 @@ export default function Catalog() {
           `${count(status.data.catalog_entries)} books published by Kiwix · checked ${ago(status.data.catalog_refreshed)}`
         }
       >
-        <button className="btn" disabled={busy} onClick={() => run(() => post("/api/catalog/refresh"))}>
+        <button className="btn w-full sm:w-auto" disabled={busy} onClick={() => run(() => post("/api/catalog/refresh"))}>
           Refresh catalog
         </button>
       </PageHeader>
       <div className="mb-4 flex flex-wrap gap-2">
         <input className="input min-w-48 flex-1" placeholder="Search the catalog…" value={text} onChange={(e) => setText(e.target.value)} />
-        <select className="input w-auto" value={lang} onChange={(e) => (setLang(e.target.value), setPage(0))}>
+        <select className="input w-auto min-w-0 flex-1 sm:flex-none" value={lang} onChange={(e) => (setLang(e.target.value), setPage(0))}>
           <option value="">All languages</option>
           {facets.data?.languages.map((item) => (
             <option key={item.value} value={item.value}>
@@ -75,7 +75,7 @@ export default function Catalog() {
             </option>
           ))}
         </select>
-        <select className="input w-auto" value={category} onChange={(e) => (setCategory(e.target.value), setPage(0))}>
+        <select className="input w-auto min-w-0 flex-1 sm:flex-none" value={category} onChange={(e) => (setCategory(e.target.value), setPage(0))}>
           <option value="">All categories</option>
           {facets.data?.categories.map((item) => (
             <option key={item.value} value={item.value}>
@@ -83,7 +83,7 @@ export default function Catalog() {
             </option>
           ))}
         </select>
-        <select className="input w-auto" value={sort} onChange={(e) => (setSort(e.target.value), setPage(0))} aria-label="Sort by">
+        <select className="input w-full sm:w-auto" value={sort} onChange={(e) => (setSort(e.target.value), setPage(0))} aria-label="Sort by">
           <option value="title">Title A–Z</option>
           <option value="title_desc">Title Z–A</option>
           <option value="newest">Newest first</option>

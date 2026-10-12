@@ -89,6 +89,14 @@ CREATE TABLE IF NOT EXISTS history (
     result TEXT NOT NULL,
     message TEXT NOT NULL DEFAULT ''
 );
+CREATE TABLE IF NOT EXISTS ai_providers (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'custom',
+    base_url TEXT NOT NULL,
+    api_key TEXT NOT NULL DEFAULT '',
+    created REAL NOT NULL DEFAULT (unixepoch('subsec'))
+);
 CREATE TABLE IF NOT EXISTS chats (
     id TEXT PRIMARY KEY,
     title TEXT NOT NULL,
@@ -103,6 +111,10 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     sources TEXT,
     queries TEXT,
     error TEXT,
+    model TEXT,
+    reasoning TEXT,
+    thought_seconds REAL,
+    steps TEXT,
     created REAL NOT NULL DEFAULT (unixepoch('subsec'))
 );
 CREATE INDEX IF NOT EXISTS chat_messages_chat ON chat_messages (chat_id, id);
@@ -137,6 +149,17 @@ class Database:
     def _migrate(self) -> None:
         """Add columns introduced after a database was first created."""
         columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(books)")}
+        chat_columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(chat_messages)")
+        }
+        for column, kind in (
+            ("model", "TEXT"),
+            ("reasoning", "TEXT"),
+            ("thought_seconds", "REAL"),
+            ("steps", "TEXT"),
+        ):
+            if column not in chat_columns:
+                self._conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {column} {kind}")
         if "category" not in columns:
             self._conn.execute(
                 "ALTER TABLE books ADD COLUMN category TEXT NOT NULL DEFAULT 'other'"

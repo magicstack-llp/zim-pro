@@ -6,7 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse, Response
 
 from ..context import Context, get_context
-from ..library.reader import find_entry, main_path, random_path
+from ..library.article import markdown_url, to_markdown
+from ..library.reader import find_entry, main_path, random_path, read_article
 
 router = APIRouter()
 
@@ -41,6 +42,35 @@ def random_article(book_id: str, ctx: Context = Depends(get_context)):
     if path is None:
         raise HTTPException(404, "This book has no articles")
     return RedirectResponse(_content_url(book_id, path), 302)
+
+
+@router.get("/markdown/{book_id}")
+@router.get("/markdown/{book_id}/")
+def markdown_home(book_id: str, ctx: Context = Depends(get_context)):
+    _, archive = _open(ctx, book_id)
+    path = main_path(archive)
+    if path is None:
+        raise HTTPException(404, "This book has no main page")
+    return RedirectResponse(markdown_url(book_id, path), 302)
+
+
+@router.get("/markdown/{book_id}/{path:path}")
+def markdown(book_id: str, path: str, request: Request, ctx: Context = Depends(get_context)):
+    """One article as Markdown: its text without the page around it."""
+    book, archive = _open(ctx, book_id)
+    entry = find_entry(archive, path, request.url.query)
+    article = read_article(archive, entry.path) if entry is not None else None
+    if article is None:
+        raise HTTPException(404, f"{path} was not found in {book['title']}")
+    if not article.mimetype.startswith("text/"):
+        raise HTTPException(415, f"{path} is {article.mimetype}, not a page of text")
+    # Browsers show plain text in the tab but offer to download text/markdown.
+    in_browser = "text/html" in request.headers.get("accept", "")
+    return Response(
+        to_markdown(article, book_id),
+        media_type="text/plain" if in_browser else "text/markdown",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 @router.api_route("/content/{book_id}/{path:path}", methods=["GET", "HEAD"])

@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import mcp_server, scheduler
+from . import mcp_server, providers, scheduler
 from .api import ai, catalog, content, downloads, library
 from .config import Config
 from .context import Context
@@ -22,6 +22,8 @@ log = logging.getLogger(__name__)
 
 def build_context(config: Config) -> Context:
     db = Database(config.db_path)
+    providers.migrate_single_provider(db)
+    providers.seed_free_providers(db)
     pool = ArchivePool()
     scanner = Scanner(db, pool, config.data_dir)
     events = EventBus()

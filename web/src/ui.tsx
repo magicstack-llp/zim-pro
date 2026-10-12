@@ -37,12 +37,12 @@ export function Progress({ value, tone = "brand" }: { value: number; tone?: "bra
 
 export function PageHeader({ title, subtitle, children }: { title: string; subtitle?: ReactNode; children?: ReactNode }) {
   return (
-    <div className="mb-5 flex flex-wrap items-end justify-between gap-3">
+    <div className="mb-4 flex flex-wrap items-end justify-between gap-3 sm:mb-5">
       <div className="min-w-0">
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+        <h1 className="text-[1.7rem] leading-tight font-bold tracking-tight sm:text-2xl sm:font-semibold">{title}</h1>
         {subtitle && <p className="muted mt-1 text-sm">{subtitle}</p>}
       </div>
-      {children && <div className="flex flex-wrap items-center gap-2">{children}</div>}
+      {children && <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">{children}</div>}
     </div>
   );
 }
@@ -80,7 +80,7 @@ export function Tabs<T extends string>({
         <button
           key={option.value}
           onClick={() => onChange(option.value)}
-          className={`border-b-2 px-3 py-2 text-sm font-medium whitespace-nowrap ${
+          className={`border-b-2 px-3 py-2.5 text-sm font-medium whitespace-nowrap sm:py-2 ${
             value === option.value
               ? "border-brand-600 text-brand-700 dark:text-brand-400"
               : "muted border-transparent hover:text-zinc-800 dark:hover:text-zinc-200"
