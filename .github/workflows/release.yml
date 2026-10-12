@@ -77,5 +77,8 @@ jobs:
           test -s notes.md || echo "See CHANGELOG.md." > notes.md
       - uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          # Named, because uv also writes a .gitignore into dist/.
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
           body_path: notes.md
