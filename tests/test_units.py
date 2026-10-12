@@ -617,3 +617,43 @@ def test_markdown_page_keeps_pictures_and_a_model_gets_none():
     assert page.count("A still in a pit") == 1 and "flag" not in page and "logo" not in page
     for_model = to_markdown(article)
     assert "![" not in for_model and "still in a pit" not in for_model and "video" not in for_model
+
+
+def test_search_history_moves_repeats_to_the_top_and_is_capped():
+    db = Database(":memory:")
+    db.add_search("solar still")
+    db.add_search("water", book="wikipedia_en_all")
+    db.add_search("solar still")
+    found = db.list_searches()
+    assert [(s["query"], s["book"]) for s in found] == [
+        ("solar still", ""),
+        ("water", "wikipedia_en_all"),
+    ]
+    # The same words in another book are a different search.
+    db.add_search("water")
+    assert len(db.list_searches()) == 3
+    for n in range(db.SEARCHES_KEPT + 20):
+        db.add_search(f"query {n}")
+    kept = db.list_searches()
+    assert len(kept) == db.SEARCHES_KEPT and kept[0]["query"] == f"query {db.SEARCHES_KEPT + 19}"
+
+
+def test_provider_can_be_turned_off_and_back_on_without_losing_its_key():
+    from zim_pro import providers
+    from zim_pro.providers import Provider
+
+    db = Database(":memory:")
+    providers.save_provider(db, Provider("p1", "Gemini", "gemini", "https://example.org/v1", "key"))
+    assert providers.get_provider(db, "p1").enabled
+    assert providers.usable_provider(db, "p1") is not None
+
+    off = providers.get_provider(db, "p1")
+    off.enabled = False
+    providers.save_provider(db, off)
+    saved = providers.get_provider(db, "p1")
+    assert not saved.enabled and saved.api_key == "key" and saved.public()["enabled"] is False
+    assert providers.usable_provider(db, "p1") is None and providers.usable_provider(db, "") is None
+
+    saved.enabled = True
+    providers.save_provider(db, saved)
+    assert providers.usable_provider(db, "p1").api_key == "key"

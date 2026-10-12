@@ -1,7 +1,9 @@
 name: Release
 
-# Pushing a version tag (v1.2.3) lints and tests the code, publishes the Docker image to GHCR and
-# attaches the Python package to a GitHub release.
+# Pushing a version tag (v1.2.3) lints and tests the code, then in parallel builds the
+# Docker image for each architecture, the Python package and the standalone executables.
+# Only when all of them have succeeded is the GitHub release created, with the
+# executables and the source attached.
 on:
   push:
     tags: ["v*.*.*"]
@@ -9,19 +11,31 @@ on:
 permissions:
   contents: read
 
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
+
 jobs:
   test:
     uses: ./.github/workflows/ci.yml
 
-  docker:
+  # One native runner per architecture, side by side; each pushes its image by digest.
+  docker-build:
+    name: Docker image (${{ matrix.arch }})
     needs: test
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
     steps:
       - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -31,26 +45,69 @@ jobs:
       - id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository }}
+          images: ${{ env.IMAGE }}
+      - id: build
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/${{ matrix.arch }}
+          labels: ${{ steps.meta.outputs.labels }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.arch }}
+      - name: Note the image digest
+        run: |
+          mkdir -p digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digest-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  # Joins the two images under the version tags, so one name serves both architectures.
+  docker:
+    name: Docker image (publish)
+    needs: docker-build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: digests
+          pattern: digest-*
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
           # v1.2.3 -> 1.2.3, 1.2 and latest
           tags: |
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
-      - uses: docker/build-push-action@v6
-        with:
-          context: .
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Publish the multi-architecture image
+        working-directory: digests
+        run: |
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "$IMAGE@sha256:%s " *)
+      - run: docker buildx imagetools inspect "$IMAGE:${{ steps.meta.outputs.version }}"
 
+  # The wheel and the source archive.
   package:
+    name: Python package
     needs: test
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v6
@@ -70,15 +127,113 @@ jobs:
       - run: uv build
       - name: Check the wheel starts
         run: uvx --from dist/*.whl zim-pro --help
+      - uses: actions/upload-artifact@v4
+        with:
+          name: package
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  # A single file that runs without Python installed. Built on the oldest runner image
+  # available so that it also starts on older Linux systems.
+  binary:
+    name: Executable (${{ matrix.target }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: linux-x86_64
+            runner: ubuntu-22.04
+          - target: linux-arm64
+            runner: ubuntu-22.04-arm
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Build the web app into the package
+        run: |
+          npm ci
+          npm run build
+          cp -r dist ../src/zim_pro/web
+        working-directory: web
+      - name: Take the version from the tag
+        run: uv version "${GITHUB_REF_NAME#v}"
+      - run: uv sync --frozen --no-dev
+      - name: Build the executable
+        run: |
+          uv run --no-sync --with pyinstaller pyinstaller --noconfirm --onefile --name zim-pro \
+            --collect-all zim_pro --collect-all libzim --collect-submodules uvicorn \
+            packaging/entry.py
+      - name: Check it starts and serves the app
+        run: |
+          mkdir -p check/data check/state
+          KIWIX_DATA_DIR=check/data KIWIX_STATE_DIR=check/state KIWIX_HOST=127.0.0.1 \
+            KIWIX_PORT=8099 ./dist/zim-pro &
+          server=$!
+          for attempt in $(seq 1 30); do
+            curl -fs http://127.0.0.1:8099/api/status > /dev/null && break
+            sleep 1
+          done
+          curl -fs http://127.0.0.1:8099/ | grep -q "<title>Zim Pro</title>"
+          kill "$server"
+      - name: Pack it
+        run: |
+          name="zim-pro-${GITHUB_REF_NAME#v}-${{ matrix.target }}"
+          mkdir "$name"
+          cp dist/zim-pro README.md CHANGELOG.md "$name/"
+          tar -czf "$name.tar.gz" "$name"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: binary-${{ matrix.target }}
+          path: zim-pro-*.tar.gz
+          if-no-files-found: error
+          retention-days: 1
+
+  # Last of all, once the image, the package and the executables are all out.
+  release:
+    name: GitHub release
+    needs: [docker, package, binary]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          name: package
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          pattern: binary-*
+          merge-multiple: true
+      - name: Add checksums
+        working-directory: release
+        run: sha256sum * > SHA256SUMS
       - name: Take the release notes from the changelog
         run: |
           version="${GITHUB_REF_NAME#v}"
           awk -v v="$version" '/^## \[/ { on = ($2 == "[" v "]") ; next } on && !/^\[[^]]+\]: /' CHANGELOG.md > notes.md
           test -s notes.md || echo "See CHANGELOG.md." > notes.md
+          cat >> notes.md <<NOTES
+
+          ## Install
+
+          - **Docker:** \`docker pull $IMAGE:$version\` (amd64 and arm64)
+          - **Executable:** download \`zim-pro-$version-linux-x86_64.tar.gz\` or \`-linux-arm64\`, unpack it and run \`./zim-pro\`. No Python needed.
+          - **Python 3.13:** \`pip install\` the \`.whl\` file below.
+
+          GitHub adds the source code archives to every release automatically.
+          NOTES
       - uses: softprops/action-gh-release@v2
         with:
-          # Named, because uv also writes a .gitignore into dist/.
-          files: |
-            dist/*.whl
-            dist/*.tar.gz
+          files: release/*
           body_path: notes.md

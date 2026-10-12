@@ -4,8 +4,10 @@ import { BrowserRouter } from "react-router-dom";
 import App from "./App";
 import "./index.css";
 import { LiveProvider } from "./lib/live";
+import { installTheme } from "./lib/theme";
 import { installViewport } from "./lib/viewport";
 
+installTheme();
 installViewport();
 
 createRoot(document.getElementById("root")!).render(

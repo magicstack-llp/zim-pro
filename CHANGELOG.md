@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-10-12
+
+### Added
+
+- **Theme setting.** Light, dark or automatic, at the bottom of the menu; remembered per
+  browser and applied before the page is drawn.
+- **Search history.** A panel on the Search page, opened with the history button, lists past
+  searches to run again or remove. A setting turns it off, and it can be cleared.
+- **Turn providers on and off.** A switch on each AI provider stops it being used without
+  removing it or its key.
+- **Internet search toggle** in the chat box, always shown; it points to Settings when web
+  search is not set up yet.
+- **Standalone executables** for Linux x86-64 and arm64 in each release, which run without
+  Python installed, and a checksum file for the release files.
+- A project logo, used as the app icon, the favicon and the installed web-app icon.
+
+### Changed
+
+- The app opens on Ask AI. The Library moved from `/` to `/library`.
+- Search comes before Library in the menu.
+- The Python package is named `zim_pro` (was `kiwix_updater`).
+- Releases: the Docker image is built for each architecture on its own runner at the same
+  time as the package and executables, and the GitHub release is created only after all of
+  them have succeeded.
+
+### Fixed
+
+- The MCP `get_article` tool no longer prints the article title twice.
+
+
 ## [0.1.0] - 2026-10-12
 
 First release.
@@ -44,5 +74,6 @@ First release.
 - **Packaging.** A Docker image for amd64 and arm64 on GHCR, and a Python wheel with the web
   app inside, both published by a release workflow when a version tag is pushed.
 
-[Unreleased]: https://github.com/magicstack-llp/zim-pro/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/magicstack-llp/zim-pro/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/magicstack-llp/zim-pro/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/magicstack-llp/zim-pro/releases/tag/v0.1.0

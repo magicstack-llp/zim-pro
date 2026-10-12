@@ -70,6 +70,8 @@ class Provider:
     kind: str
     base_url: str
     api_key: str
+    # Off: kept with its key, but not offered in the model pickers or used for anything.
+    enabled: bool = True
 
     def public(self) -> dict[str, Any]:
         return {
@@ -78,6 +80,7 @@ class Provider:
             "kind": self.kind,
             "base_url": self.base_url,
             "has_key": bool(self.api_key),
+            "enabled": self.enabled,
             "web": self.kind in WEB_KINDS,
             # Works with no account: rate-limited, and worth saying so in the interface.
             "free": self.kind in FREE_KINDS and not self.api_key,
@@ -110,7 +113,9 @@ def clean_url(base_url: str) -> str:
 
 
 def _row(row: dict[str, Any]) -> Provider:
-    return Provider(row["id"], row["name"], row["kind"], row["base_url"], row["api_key"])
+    return Provider(
+        row["id"], row["name"], row["kind"], row["base_url"], row["api_key"], bool(row["enabled"])
+    )
 
 
 def list_providers(db: Database) -> list[Provider]:
@@ -124,13 +129,27 @@ def get_provider(db: Database, provider_id: str) -> Provider | None:
 
 def save_provider(db: Database, provider: Provider) -> Provider:
     db.execute(
-        "INSERT INTO ai_providers (id, name, kind, base_url, api_key) VALUES (?, ?, ?, ?, ?) "
+        "INSERT INTO ai_providers (id, name, kind, base_url, api_key, enabled) "
+        "VALUES (?, ?, ?, ?, ?, ?) "
         "ON CONFLICT (id) DO UPDATE SET name = excluded.name, kind = excluded.kind, "
-        "base_url = excluded.base_url, api_key = excluded.api_key",
-        (provider.id, provider.name, provider.kind, provider.base_url, provider.api_key),
+        "base_url = excluded.base_url, api_key = excluded.api_key, enabled = excluded.enabled",
+        (
+            provider.id,
+            provider.name,
+            provider.kind,
+            provider.base_url,
+            provider.api_key,
+            int(provider.enabled),
+        ),
     )
     _models.pop(provider.id, None)
     return provider
+
+
+def usable_provider(db: Database, provider_id: str) -> Provider | None:
+    """The provider, unless it is missing or turned off."""
+    provider = get_provider(db, provider_id) if provider_id else None
+    return provider if provider and provider.enabled else None
 
 
 def delete_provider(db: Database, provider_id: str) -> None:

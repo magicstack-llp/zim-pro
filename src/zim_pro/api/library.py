@@ -172,6 +172,38 @@ CHOICES = {
 }
 
 
+class SearchEntry(BaseModel):
+    query: str
+    book: str = ""
+    category: str = ""
+
+
+@router.get("/search/history")
+def search_history(ctx: Context = Depends(get_context)) -> dict[str, Any]:
+    return {"enabled": ctx.db.get_setting("search_history"), "items": ctx.db.list_searches()}
+
+
+@router.post("/search/history")
+def remember_search(entry: SearchEntry, ctx: Context = Depends(get_context)) -> dict[str, bool]:
+    query = " ".join(entry.query.split())[:200]
+    saved = bool(query) and bool(ctx.db.get_setting("search_history"))
+    if saved:
+        ctx.db.add_search(query, entry.book[:200], entry.category[:100])
+    return {"saved": saved}
+
+
+@router.delete("/search/history/{entry_id}")
+def forget_search(entry_id: int, ctx: Context = Depends(get_context)) -> dict[str, bool]:
+    ctx.db.execute("DELETE FROM searches WHERE id = ?", (entry_id,))
+    return {"ok": True}
+
+
+@router.delete("/search/history")
+def clear_search_history(ctx: Context = Depends(get_context)) -> dict[str, bool]:
+    ctx.db.execute("DELETE FROM searches")
+    return {"ok": True}
+
+
 def _public_settings(ctx: Context) -> dict[str, Any]:
     """Settings as shown to the browser: secrets never leave the server."""
     settings = ctx.db.get_settings()

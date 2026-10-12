@@ -95,6 +95,7 @@ CREATE TABLE IF NOT EXISTS ai_providers (
     kind TEXT NOT NULL DEFAULT 'custom',
     base_url TEXT NOT NULL,
     api_key TEXT NOT NULL DEFAULT '',
+    enabled INTEGER NOT NULL DEFAULT 1,
     created REAL NOT NULL DEFAULT (unixepoch('subsec'))
 );
 CREATE TABLE IF NOT EXISTS chats (
@@ -118,6 +119,14 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created REAL NOT NULL DEFAULT (unixepoch('subsec'))
 );
 CREATE INDEX IF NOT EXISTS chat_messages_chat ON chat_messages (chat_id, id);
+CREATE TABLE IF NOT EXISTS searches (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts REAL NOT NULL DEFAULT (unixepoch('subsec')),
+    query TEXT NOT NULL,
+    book TEXT NOT NULL DEFAULT '',
+    category TEXT NOT NULL DEFAULT '',
+    UNIQUE (query, book, category)
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -160,6 +169,13 @@ class Database:
         ):
             if column not in chat_columns:
                 self._conn.execute(f"ALTER TABLE chat_messages ADD COLUMN {column} {kind}")
+        provider_columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(ai_providers)")
+        }
+        if "enabled" not in provider_columns:
+            self._conn.execute(
+                "ALTER TABLE ai_providers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"
+            )
         if "category" not in columns:
             self._conn.execute(
                 "ALTER TABLE books ADD COLUMN category TEXT NOT NULL DEFAULT 'other'"
@@ -196,6 +212,31 @@ class Database:
     def close(self) -> None:
         with self._lock:
             self._conn.close()
+
+    # -- search history ---------------------------------------------------
+
+    SEARCHES_KEPT = 200
+
+    def add_search(self, query: str, book: str = "", category: str = "") -> None:
+        """Remember a search; one made again moves to the top rather than repeating."""
+        with self._lock:
+            # Removed and added again, so that the newest id is always the latest search.
+            self.execute(
+                "DELETE FROM searches WHERE query = ? AND book = ? AND category = ?",
+                (query, book, category),
+            )
+            self.execute(
+                "INSERT INTO searches (query, book, category) VALUES (?, ?, ?)",
+                (query, book, category),
+            )
+            self.execute(
+                "DELETE FROM searches WHERE id NOT IN "
+                "(SELECT id FROM searches ORDER BY id DESC LIMIT ?)",
+                (self.SEARCHES_KEPT,),
+            )
+
+    def list_searches(self) -> list[dict[str, Any]]:
+        return self.all("SELECT id, ts, query, book, category FROM searches ORDER BY id DESC")
 
     # -- settings ---------------------------------------------------------
 

@@ -124,7 +124,7 @@ export default function Reader() {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3">
         <p className="font-medium">This book is not in the library.</p>
-        <Link className="btn" to="/">
+        <Link className="btn" to="/library">
           Back to library
         </Link>
       </div>
@@ -134,7 +134,7 @@ export default function Reader() {
   return (
     <div className="flex h-[var(--vvh,100dvh)] flex-col">
       <header className="flex shrink-0 items-center gap-2 border-b border-zinc-200 bg-white px-2 py-1.5 dark:border-zinc-800 dark:bg-zinc-900">
-        <Link to="/" className="btn px-2" title="Back to library">
+        <Link to="/library" className="btn px-2" title="Back to library">
           ←<span className="hidden sm:inline"> Library</span>
         </Link>
         {book && <BookIcon src={bookIcon(book)} title={book.title} size={28} />}

@@ -15,6 +15,7 @@ interface SettingsData {
   default_policy: string;
   keep_old_versions: boolean;
   mcp_allow_writes: boolean;
+  search_history: boolean;
   ai_provider: string;
   ai_model: string;
   ai_max_sources: number;
@@ -63,6 +64,7 @@ export default function Settings() {
   const loaded = useData<SettingsData>("/api/settings");
   const leftovers = useData<Leftover[]>("/api/library/leftovers");
   const [form, setForm] = useState<SettingsData | null>(null);
+  const [historyCleared, setHistoryCleared] = useState(false);
   const [note, setNote] = useState<string | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [saved, setSaved] = useState("");
@@ -314,6 +316,22 @@ export default function Settings() {
             </div>
             <Field label="Let LLM apps start updates" hint="Off: MCP clients can only search and read.">
               <input type="checkbox" className="h-4 w-4" checked={form.mcp_allow_writes} onChange={(e) => set("mcp_allow_writes", e.target.checked)} />
+            </Field>
+          </section>
+          <section className="card divide-y divide-zinc-100 px-4 dark:divide-zinc-800">
+            <h2 className="py-3 font-medium">Search</h2>
+            <Field label="Keep search history" hint="Remember searches made on the Search page; the history button there shows them. Turning this off keeps what is already saved until you clear it.">
+              <input type="checkbox" className="h-4 w-4" checked={form.search_history} onChange={(e) => set("search_history", e.target.checked)} />
+            </Field>
+            <Field label="Saved searches" hint="Remove every search remembered so far.">
+              <button
+                type="button"
+                className="btn"
+                onClick={() => api("/api/search/history", { method: "DELETE" }).then(() => setHistoryCleared(true))}
+                disabled={historyCleared}
+              >
+                {historyCleared ? "Cleared" : "Clear history"}
+              </button>
             </Field>
           </section>
           <section className="card px-4 py-3">

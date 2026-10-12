@@ -4,15 +4,27 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
     <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#fafafa" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#09090b" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#fafafa" />
+    <script>
+      // The chosen theme, applied before anything is drawn so the page never flashes
+      // the wrong colours. src/lib/theme.ts keeps it up to date afterwards.
+      (function () {
+        var saved = null;
+        try { saved = localStorage.getItem("theme"); } catch (error) {}
+        var dark = saved === "dark" || (saved !== "light" && matchMedia("(prefers-color-scheme: dark)").matches);
+        var root = document.documentElement;
+        if (dark) root.classList.add("dark");
+        root.style.colorScheme = dark ? "dark" : "light";
+        document.querySelector('meta[name="theme-color"]').content = dark ? "#09090b" : "#fafafa";
+      })();
+    </script>
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="default" />
     <meta name="apple-mobile-web-app-title" content="Zim Pro" />
     <link rel="manifest" href="/manifest.webmanifest" />
-    <link rel="icon" href="/icon.svg" type="image/svg+xml" />
-    <link rel="apple-touch-icon" href="/icon.svg" />
+    <link rel="icon" href="/icon-192.png" type="image/png" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
     <title>Zim Pro</title>
   </head>
   <body>

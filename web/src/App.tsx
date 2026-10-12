@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, Route, Routes, useLocation } from "react-router-dom";
+import { Navigate, NavLink, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import type { UpdateItem } from "./lib/api";
+import { ThemePicker } from "./ThemePicker";
 import { useData, useLive } from "./lib/live";
 import Ask from "./pages/Ask";
 import Catalog from "./pages/Catalog";
@@ -47,8 +48,8 @@ function Shell() {
 
   const links = [
     { to: "/ask", label: "Ask AI", short: "Ask", icon: "ask" },
-    { to: "/", label: "Library", short: "Library", icon: "library" },
     { to: "/search", label: "Search", short: "Search", icon: "search" },
+    { to: "/library", label: "Library", short: "Library", icon: "library" },
     { to: "/updates", label: "Updates", short: "Updates", icon: "updates", badge: updates.data?.update_count },
     { to: "/downloads", label: "Downloads", short: "Downloads", icon: "downloads", badge: active },
     { to: "/catalog", label: "Catalog", short: "Catalog", icon: "catalog" },
@@ -67,14 +68,14 @@ function Shell() {
       {/* Desktop: a sidebar. */}
       <nav className="sticky top-0 z-20 hidden h-screen w-52 shrink-0 flex-col border-r border-zinc-200 bg-white/90 px-3 py-5 md:flex dark:border-zinc-800 dark:bg-zinc-900/90" aria-label="Main">
         <div className="mb-5 flex items-center gap-2 px-1">
-          <img src="/icon.svg" alt="" className="h-8 w-8 rounded-lg" />
+          <img src="/icon-192.png" alt="" className="h-8 w-8 rounded-lg ring-1 ring-zinc-200 dark:ring-0" />
           <span className="font-semibold">Zim Pro</span>
         </div>
         {links.map((link) => (
           <NavLink
             key={link.to}
             to={link.to}
-            end={link.to === "/"}
+           
             className={({ isActive }) =>
               `mb-0.5 flex items-center gap-2.5 rounded-lg px-3 py-1.5 text-sm font-medium whitespace-nowrap transition ${
                 isActive
@@ -88,6 +89,9 @@ function Shell() {
             <Badge count={"badge" in link ? link.badge : undefined} />
           </NavLink>
         ))}
+        <div className="mt-auto pt-3">
+          <ThemePicker />
+        </div>
       </nav>
 
       {fullBleed ? (
@@ -123,6 +127,9 @@ function Shell() {
                 <Badge count={"badge" in link ? link.badge : undefined} />
               </NavLink>
             ))}
+            <div className="mt-2 border-t border-zinc-200 px-1 pt-3 dark:border-zinc-800">
+              <ThemePicker large />
+            </div>
           </div>
         </div>
       )}
@@ -131,7 +138,7 @@ function Shell() {
         aria-label="Main"
       >
         {tabs.map((link) => (
-          <NavLink key={link.to} to={link.to} end={link.to === "/"} className={({ isActive }) => tab(isActive && !more)}>
+          <NavLink key={link.to} to={link.to} className={({ isActive }) => tab(isActive && !more)}>
             <span className="relative">
               <Icon name={link.icon} className="h-[1.35rem] w-[1.35rem]" />
               {"badge" in link && !!link.badge && <span className="bg-brand-600 absolute -top-1 -right-1.5 h-2 w-2 rounded-full ring-2 ring-white dark:ring-zinc-950" />}
@@ -156,14 +163,16 @@ export default function App() {
     <Routes>
       <Route path="/read/:bookId/*" element={<Reader />} />
       <Route element={<Shell />}>
-        <Route path="/" element={<Library />} />
+        {/* The app opens on Ask AI. */}
+        <Route path="/" element={<Navigate to="/ask" replace />} />
+        <Route path="/library" element={<Library />} />
         <Route path="/ask/:chatId?" element={<Ask />} />
         <Route path="/search" element={<Search />} />
         <Route path="/updates" element={<Updates />} />
         <Route path="/downloads" element={<Downloads />} />
         <Route path="/catalog" element={<Catalog />} />
         <Route path="/settings" element={<Settings />} />
-        <Route path="*" element={<Library />} />
+        <Route path="*" element={<Navigate to="/ask" replace />} />
       </Route>
     </Routes>
   );

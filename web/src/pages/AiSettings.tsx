@@ -298,6 +298,13 @@ function ProviderDialog({ initial, onClose, onSaved }: { initial: Draft | null; 
 export function Providers({ groups, onChanged }: { groups: ModelGroup[] | null; onChanged: () => void }) {
   // undefined: closed. null: adding, at the "pick a service" step. Otherwise: editing.
   const [dialog, setDialog] = useState<Draft | null | undefined>(undefined);
+  const [switching, setSwitching] = useState("");
+  const toggle = (provider: ProviderInfo) => {
+    setSwitching(provider.id);
+    api(`/api/ai/providers/${provider.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !provider.enabled }) })
+      .then(onChanged)
+      .finally(() => setSwitching(""));
+  };
   const edit = (provider: ProviderInfo) =>
     setDialog({ id: provider.id, name: provider.name, kind: provider.kind, base_url: provider.base_url, api_key: provider.has_key ? MASK : "" });
 
@@ -329,8 +336,8 @@ export function Providers({ groups, onChanged }: { groups: ModelGroup[] | null; 
       )}
       <ul className="divide-y divide-zinc-100 border-t border-zinc-100 empty:hidden dark:divide-zinc-800 dark:border-zinc-800">
         {groups?.map(({ provider, models, error }) => (
-          <li key={provider.id}>
-            <button className="-mx-2 flex w-[calc(100%+1rem)] items-center gap-3 rounded-xl px-2 py-3 text-left transition hover:bg-zinc-50 dark:hover:bg-zinc-800/50" onClick={() => edit(provider)} aria-label={`Edit ${provider.name}`}>
+          <li key={provider.id} className="flex items-center gap-1">
+            <button className={`-ml-2 flex min-w-0 flex-1 items-center gap-3 rounded-xl px-2 py-3 text-left transition hover:bg-zinc-50 dark:hover:bg-zinc-800/50 ${provider.enabled ? "" : "opacity-55"}`} onClick={() => edit(provider)} aria-label={`Edit ${provider.name}`}>
               <span className="bg-brand-100 text-brand-700 dark:bg-brand-900 dark:text-brand-100 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl font-semibold" aria-hidden>
                 {provider.name.charAt(0).toUpperCase()}
               </span>
@@ -343,16 +350,30 @@ export function Providers({ groups, onChanged }: { groups: ModelGroup[] | null; 
                     KIND_NAMES[provider.kind] !== provider.name && <span className="badge">{KIND_NAMES[provider.kind] ?? provider.kind}</span>
                   )}
                 </span>
-                <span className={`block truncate text-xs ${error ? "text-red-600 dark:text-red-400" : "muted"}`}>
-                  {error ??
+                <span className={`block truncate text-xs ${error && provider.enabled ? "text-red-600 dark:text-red-400" : "muted"}`}>
+                  {!provider.enabled
+                    ? "Turned off · kept, but not used"
+                    : (error ??
                     `${models.length} model${models.length === 1 ? "" : "s"} · ${
                       provider.free ? "free, no key, rate-limited" : provider.has_key ? "key saved" : "no key"
-                    }${provider.web ? " · can search the web" : ""}`}
+                    }${provider.web ? " · can search the web" : ""}`)}
                 </span>
               </span>
               <svg viewBox="0 0 20 20" className="muted h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
                 <path d="m8 4.5 5.5 5.5L8 15.5" />
               </svg>
+            </button>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={provider.enabled}
+              aria-label={`Use ${provider.name}`}
+              title={provider.enabled ? "On. Turn off to stop using it without removing it." : "Off. Turn on to use it again."}
+              disabled={switching === provider.id}
+              onClick={() => toggle(provider)}
+              className={`relative h-6 w-11 shrink-0 rounded-full transition disabled:opacity-60 ${provider.enabled ? "bg-brand-600" : "bg-zinc-300 dark:bg-zinc-700"}`}
+            >
+              <span className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${provider.enabled ? "translate-x-5" : ""}`} />
             </button>
           </li>
         ))}

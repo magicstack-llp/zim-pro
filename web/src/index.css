@@ -2,6 +2,8 @@
 
 /* `kb:` styles apply while the on-screen keyboard is open (see lib/viewport.ts). */
 @custom-variant kb (html.keyboard-open &);
+/* `dark:` follows the theme chosen in the menu (see lib/theme.ts), not only the device. */
+@custom-variant dark (&:where(.dark, .dark *));
 
 @theme {
   --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -18,13 +20,10 @@
 :root {
   --scroll-thumb: rgb(113 113 122 / 0.35);
   --scroll-thumb-hover: rgb(113 113 122 / 0.65);
-  color-scheme: light dark;
 }
-@media (prefers-color-scheme: dark) {
-  :root {
-    --scroll-thumb: rgb(161 161 170 / 0.28);
-    --scroll-thumb-hover: rgb(161 161 170 / 0.55);
-  }
+:root.dark {
+  --scroll-thumb: rgb(161 161 170 / 0.28);
+  --scroll-thumb-hover: rgb(161 161 170 / 0.55);
 }
 /* WebKit ignores these rules once the standard properties below are set, so each
    browser gets one or the other. */

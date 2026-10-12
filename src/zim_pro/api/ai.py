@@ -40,7 +40,8 @@ def _from_body(body: ProviderBody, existing: Provider | None, provider_id: str) 
     key = body.api_key.strip()
     if key == SECRET_MASK:
         key = existing.api_key if existing else ""
-    return Provider(provider_id, body.name.strip(), kind, base_url, key)
+    enabled = existing.enabled if existing else True
+    return Provider(provider_id, body.name.strip(), kind, base_url, key, enabled)
 
 
 @router.get("/providers")
@@ -62,6 +63,22 @@ def update_provider(provider_id: str, body: ProviderBody, ctx: Context = Depends
     if existing is None:
         raise HTTPException(404, "No such provider")
     return providers.save_provider(ctx.db, _from_body(body, existing, provider_id)).public()
+
+
+class ProviderSwitch(BaseModel):
+    enabled: bool
+
+
+@router.patch("/providers/{provider_id}")
+def switch_provider(
+    provider_id: str, body: ProviderSwitch, ctx: Context = Depends(get_context)
+) -> dict[str, Any]:
+    """Turn a provider on or off without losing its key or the settings that point at it."""
+    provider = providers.get_provider(ctx.db, provider_id)
+    if provider is None:
+        raise HTTPException(404, "No such provider")
+    provider.enabled = body.enabled
+    return providers.save_provider(ctx.db, provider).public()
 
 
 @router.delete("/providers/{provider_id}")
@@ -115,6 +132,8 @@ async def models(
 
     async def load(provider: Provider) -> dict[str, Any]:
         entry: dict[str, Any] = {"provider": provider.public(), "models": [], "error": None}
+        if not provider.enabled:
+            return entry  # listed so it can be turned back on, with nothing to pick
         try:
             entry["models"] = await providers.list_models(provider, use_cache=not refresh)
         except AIError as exc:
@@ -141,6 +160,8 @@ async def speech(body: Speech, ctx: Context = Depends(get_context)) -> Response:
     provider = providers.get_provider(ctx.db, body.provider or settings["tts_provider"])
     if provider is None:
         raise HTTPException(409, "Choose a provider for reading aloud under Settings → Read aloud.")
+    if not provider.enabled:
+        raise HTTPException(409, f"{provider.name} is turned off under Settings → AI providers.")
     try:
         audio, media_type = await providers.speech(
             provider,
@@ -265,10 +286,15 @@ def delete_all_chats(ctx: Context = Depends(get_context)) -> dict[str, bool]:
 def _pick_model(ctx: Context, body: Question, settings: dict[str, Any]) -> tuple[Provider, str]:
     provider = providers.get_provider(ctx.db, body.provider or settings["ai_provider"])
     if provider is None:
-        available = providers.list_providers(ctx.db)
+        available = [p for p in providers.list_providers(ctx.db) if p.enabled]
         if not available:
             raise AIError("No AI provider is set up. Add one under Settings → AI providers.")
         provider = available[0]
+    if not provider.enabled:
+        raise AIError(
+            f"{provider.name} is turned off. Turn it on under Settings → AI providers, "
+            "or pick another model."
+        )
     model = body.model if body.provider else settings["ai_model"]
     if not model:
         raise AIError("No model is chosen. Pick one in the chat box or under Settings.")
@@ -487,7 +513,7 @@ async def ask(body: Question, ctx: Context = Depends(get_context)) -> StreamingR
                         detail = str(exc).removeprefix("Web search failed: ")
                         yield finish(web_step, "Web search failed", "failed", detail=detail)
                 elif wants_web and web_mode == "model":
-                    searcher = providers.get_provider(ctx.db, settings["web_provider"])
+                    searcher = providers.usable_provider(ctx.db, settings["web_provider"])
                     if searcher and settings["web_model"]:
                         web_model = (searcher, settings["web_model"])
                     else:

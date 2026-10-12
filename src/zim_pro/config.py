@@ -30,6 +30,8 @@ DEFAULT_SETTINGS: dict[str, int | bool | str] = {
     "default_policy": "notify",
     "keep_old_versions": False,
     "mcp_allow_writes": False,
+    # Remember the searches made on the Search page.
+    "search_history": True,
     # Ask AI. Providers live in their own table; these pick the defaults among them.
     "ai_provider": "",
     "ai_model": "",

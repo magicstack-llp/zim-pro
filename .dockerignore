@@ -9,3 +9,7 @@ dist
 src/zim_pro/web
 .github
 assets
+build
+packaging
+*.spec
+CHANGELOG.md

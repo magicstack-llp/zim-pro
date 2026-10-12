@@ -2,9 +2,13 @@
   "name": "Zim Pro",
   "short_name": "Zim Pro",
   "description": "Your offline library: read, search and ask.",
-  "start_url": "/",
+  "start_url": "/ask",
   "display": "standalone",
-  "background_color": "#fafafa",
+  "background_color": "#ffffff",
   "theme_color": "#0f766e",
-  "icons": [{ "src": "/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+  "icons": [
+    { "src": "/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "/icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "/icon-maskable.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
 }

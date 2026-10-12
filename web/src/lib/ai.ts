@@ -8,6 +8,8 @@ export interface ProviderInfo {
   kind: string;
   base_url: string;
   has_key: boolean;
+  /** Off: kept, but its models are not offered anywhere. */
+  enabled: boolean;
   /** Works with no account or key, within a rate limit. */
   free?: boolean;
   /** Its models can search the web themselves. */

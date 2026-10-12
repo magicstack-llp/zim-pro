@@ -699,6 +699,7 @@ export default function Ask() {
   const [text, setText] = useState("");
   const [scope, setScope] = useState("");
   const [web, setWeb] = useState(false);
+  const [webHint, setWebHint] = useState(false);
   const [picked, setPicked] = useState(() => {
     try {
       return localStorage.getItem(MODEL_KEY) ?? "";
@@ -776,7 +777,9 @@ export default function Ask() {
 
   // The model for the next message: the one picked here if it still exists, else the default.
   const models = useMemo(() => modelOptions(groups ?? []), [groups]);
-  const fallback = modelKey(status.data?.ai_provider ?? "", status.data?.ai_model ?? "");
+  // A default whose provider has been turned off gives way to the first model on offer.
+  const defaultOff = groups?.some((g) => g.provider.id === status.data?.ai_provider && !g.provider.enabled);
+  const fallback = defaultOff ? (models[0]?.value ?? "") : modelKey(status.data?.ai_provider ?? "", status.data?.ai_model ?? "");
   const current = picked && (groups === null || models.some((o) => o.value === picked)) ? picked : fallback;
   const pickerOptions = useMemo(
     () => (current && !models.some((o) => o.value === current) ? [{ value: current, label: shortModel(splitModelKey(current)[1]) }, ...models] : models),
@@ -921,18 +924,35 @@ export default function Ask() {
           <Combobox value={scope} options={scopeOptions} placeholder="All books" searchPlaceholder="Search categories and books…" up className={`${PILL} max-w-[7.25rem] sm:max-w-44`} onChange={setScope}>
             <Icon d={ICONS.book} className="h-4 w-4 shrink-0" />
           </Combobox>
-          {webReady && (
+          <span className="relative">
             <button
               type="button"
-              aria-pressed={web}
-              onClick={() => setWeb(!web)}
-              title={web ? "Searching the web for every question" : "The web is searched only when your library has no good match. Click to always search it."}
-              className={`${PILL} ${web ? "bg-sky-100 text-sky-800 hover:bg-sky-200 dark:bg-sky-950 dark:text-sky-200 dark:hover:bg-sky-900" : ""}`}
+              role="switch"
+              aria-checked={web && webReady}
+              aria-label="Internet search"
+              onClick={() => (webReady ? setWeb(!web) : setWebHint(!webHint))}
+              onBlur={() => setTimeout(() => setWebHint(false), 150)}
+              title={
+                !webReady
+                  ? "Internet search is not set up yet"
+                  : web
+                    ? "On: the internet is searched for every question"
+                    : "Off: the internet is searched only when your library has no good match"
+              }
+              className={`${PILL} ${web && webReady ? "bg-sky-100 text-sky-800 hover:bg-sky-200 dark:bg-sky-950 dark:text-sky-200 dark:hover:bg-sky-900" : ""}`}
             >
               <Icon d={ICONS.globe} className="h-4 w-4 shrink-0" />
-              <span className="hidden sm:inline">Web</span>
+              <span className="hidden sm:inline">Internet</span>
             </button>
-          )}
+            {webHint && !webReady && (
+              <span role="status" className="card absolute bottom-full left-0 z-30 mb-2 block w-64 p-3 text-xs leading-relaxed shadow-lg">
+                Internet search is not set up yet. Choose a search service or a searching model first.
+                <Link to="/settings#web-search" className="text-brand-700 dark:text-brand-400 mt-1.5 block font-medium" onMouseDown={(event) => event.preventDefault()}>
+                  Set it up in Settings →
+                </Link>
+              </span>
+            )}
+          </span>
           <span className="flex-1" />
           {pickerOptions.length > 0 && (
             <Combobox

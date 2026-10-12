@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
-    <img src="assets/logo.png" alt="Zim Pro logo: an elephant with a ball" width="180">
-  </picture>
+  <img src="assets/logo.png" alt="Zim Pro logo: an elephant with a ball" width="180">
 </p>
 
 <h1 align="center">Zim Pro</h1>
@@ -30,7 +27,7 @@ It replaces `kiwix-serve`.
 - **Read** – a reader for every book, with in-book search and title suggestions. Entries are
   served at `/content/<book>/<path>` as `kiwix-serve` does, including `Range` for video.
 - **Search** – full text within a book, or across the whole library with results grouped by
-  book.
+  book, with a history of past searches.
 - **Ask AI** – ask a question and get an answer written from your books, with numbered
   citations, the source passages beside it, and the pictures and videos from those pages.
   Works with any OpenAI-compatible chat API, hosted or local, and with two free providers
@@ -110,7 +107,7 @@ Removing the container loses nothing: the books are in `zims` and the settings, 
 download progress are in `state`. A download in progress when the container stops carries on
 from where it was when it starts again.
 
-To stay on one version, use a version tag in place of `latest`, such as `:0.1.0` or `:0.1`.
+To stay on one version, use a version tag in place of `latest`, such as `:0.2.0` or `:0.2`.
 
 ### Build the image yourself
 
@@ -124,15 +121,27 @@ docker compose up -d --build     # http://localhost:8083
 It mounts `/mnt/storage/Media/Kiwix/data` as the library; change that path to your own
 folder of ZIM files.
 
-## Install as a Python package
+## Run without Docker
 
-Each [release](https://github.com/magicstack-llp/zim-pro/releases) has a wheel with the web
-app inside. It needs Python 3.13 on Linux or macOS.
+Each [release](https://github.com/magicstack-llp/zim-pro/releases) has two other ways to run
+it, with the web app included in both.
+
+**Standalone executable** for Linux (x86-64 and arm64). One file, no Python needed:
 
 ```sh
-pip install https://github.com/magicstack-llp/zim-pro/releases/download/v0.1.0/zim_pro-0.1.0-py3-none-any.whl
+tar -xzf zim-pro-0.2.0-linux-x86_64.tar.gz
+cd zim-pro-0.2.0-linux-x86_64
+KIWIX_DATA_DIR=/path/to/zims KIWIX_STATE_DIR=./state ./zim-pro   # http://localhost:8080
+```
+
+**Python package**, for Python 3.13 on Linux or macOS:
+
+```sh
+pip install https://github.com/magicstack-llp/zim-pro/releases/download/v0.2.0/zim_pro-0.2.0-py3-none-any.whl
 KIWIX_DATA_DIR=/path/to/zims KIWIX_STATE_DIR=./state zim-pro   # http://localhost:8080
 ```
+
+`SHA256SUMS` in the release lists the checksum of every file.
 
 ## Run from source
 
@@ -166,6 +175,8 @@ Add one or more providers under Settings → AI providers, then pick a default m
 server with the OpenAI `/chat/completions` API works: OpenAI, Google Gemini, Perplexity,
 OpenRouter, Groq, Ollama, LM Studio, llama.cpp, vLLM. The model can be switched per message
 in the chat box.
+
+Each provider has a switch: turned off, it is kept with its key but not used or offered.
 
 Two providers that need no account or key are added on first start, so Ask AI works straight
 after installing: **OVHcloud AI Endpoints** (Llama 3.3 70B, Qwen, Mistral, gpt-oss; about two
@@ -205,7 +216,7 @@ since small models often get Markdown wrong. Your own standing instructions can 
 under Settings → Ask AI.
 
 **Web search** (off by default) is used when the library has no good match, or for every
-question while the globe button in the chat box is on. Either:
+question while the Internet button in the chat box is on. Either:
 
 - a *search service* (Tavily, Brave, Serper for Google results, or your own SearXNG), whose
   results are added to the sources for your chat model, or
@@ -250,15 +261,22 @@ independent project and is not affiliated with Kiwix.
 
 ## Releasing
 
-Pushing a tag of the form `v1.2.3` runs `.github/workflows/release.yml`, which tests the
-code, publishes the Docker image to GHCR as `1.2.3`, `1.2` and `latest`, and creates a GitHub
-release with the wheel and source archive attached. The package version comes from the tag,
-and the release notes from that version's section of `CHANGELOG.md`, so move the entries
-under "Unreleased" to a new version heading before tagging.
+Pushing a tag of the form `v1.2.3` runs `.github/workflows/release.yml`:
+
+1. Lint and tests. Nothing is published if they fail.
+2. In parallel: the Docker image for amd64 and for arm64 (each on its own runner, then joined
+   and published to GHCR as `1.2.3`, `1.2` and `latest`), the Python wheel and source
+   archive, and the standalone executables.
+3. Last, and only if all of those succeeded, the GitHub release, with the executables, the
+   wheel, the source archive and their checksums attached.
+
+The package version comes from the tag, and the release notes from that version's section of
+`CHANGELOG.md`, so move the entries under "Unreleased" to a new version heading before
+tagging.
+
+```sh
+git tag v0.2.0 && git push origin v0.2.0
+```
 
 Every push to `master` and every pull request runs `.github/workflows/ci.yml`: Python lint
 (`ruff check`), formatting check and tests, and the web app's type check, tests and build.
-
-```sh
-git tag v0.1.0 && git push origin v0.1.0
-```
