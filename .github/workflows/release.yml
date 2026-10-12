@@ -1,7 +1,8 @@
 name: Release
 
 # Pushing a version tag (v1.2.3) lints and tests the code, then in parallel builds the
-# Docker image for each architecture, the Python package and the standalone executables.
+# Docker image for each architecture, the Python package (published to PyPI) and the
+# standalone executables.
 # Only when all of them have succeeded is the GitHub release created, with the
 # executables and the source attached.
 on:
@@ -136,6 +137,21 @@ jobs:
           if-no-files-found: error
           retention-days: 1
 
+  # PyPI, by trusted publishing: PyPI accepts the upload because it comes from this
+  # workflow in this repository, so there is no token to store.
+  pypi:
+    name: PyPI
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: package
+          path: dist
+      - uses: pypa/gh-action-pypi-publish@release/v1
+
   # A single file that runs without Python installed. Built on the oldest runner image
   # available so that it also starts on older Linux systems.
   binary:
@@ -200,7 +216,7 @@ jobs:
   # Last of all, once the image, the package and the executables are all out.
   release:
     name: GitHub release
-    needs: [docker, package, binary]
+    needs: [docker, package, pypi, binary]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -229,7 +245,7 @@ jobs:
 
           - **Docker:** \`docker pull $IMAGE:$version\` (amd64 and arm64)
           - **Executable:** download \`zim-pro-$version-linux-x86_64.tar.gz\` or \`-linux-arm64\`, unpack it and run \`./zim-pro\`. No Python needed.
-          - **Python 3.13:** \`pip install\` the \`.whl\` file below.
+          - **Python 3.13:** \`pip install zim-pro==$version\`
 
           GitHub adds the source code archives to every release automatically.
           NOTES

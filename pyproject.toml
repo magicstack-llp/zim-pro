@@ -1,12 +1,13 @@
 [project]
 name = "zim-pro"
-version = "0.2.0"
+version = "0.2.1"
 description = "Offline AI knowledge base: read, search and ask your ZIM library (Wikipedia and the Kiwix catalog) with a local or hosted model, and serve it to LLM apps over MCP."
 readme = "README.md"
 authors = [
     { name = "Kuldip Satpute", email = "satputekuldip@gmail.com" }
 ]
 requires-python = ">=3.13"
+keywords = ["zim", "kiwix", "offline", "wikipedia", "mcp", "rag", "knowledge-base"]
 dependencies = [
     "fastapi>=0.143.0",
     "httpx>=0.28.1",
@@ -17,6 +18,12 @@ dependencies = [
     "selectolax>=1.0.0",
     "uvicorn[standard]>=0.54.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/magicstack-llp/zim-pro"
+Repository = "https://github.com/magicstack-llp/zim-pro"
+Changelog = "https://github.com/magicstack-llp/zim-pro/blob/master/CHANGELOG.md"
+Issues = "https://github.com/magicstack-llp/zim-pro/issues"
 
 [project.scripts]
 zim-pro = "zim_pro:main"

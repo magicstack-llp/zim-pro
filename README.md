@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="Zim Pro logo: an elephant with a ball" width="180">
+  <img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/assets/logo.png" alt="Zim Pro logo: an elephant with a ball" width="180">
 </p>
 
 <h1 align="center">Zim Pro</h1>
@@ -107,7 +107,7 @@ Removing the container loses nothing: the books are in `zims` and the settings, 
 download progress are in `state`. A download in progress when the container stops carries on
 from where it was when it starts again.
 
-To stay on one version, use a version tag in place of `latest`, such as `:0.2.0` or `:0.2`.
+To stay on one version, use a version tag in place of `latest`, such as `:0.2.1` or `:0.2`.
 
 ### Build the image yourself
 
@@ -129,15 +129,15 @@ it, with the web app included in both.
 **Standalone executable** for Linux (x86-64 and arm64). One file, no Python needed:
 
 ```sh
-tar -xzf zim-pro-0.2.0-linux-x86_64.tar.gz
-cd zim-pro-0.2.0-linux-x86_64
+tar -xzf zim-pro-0.2.1-linux-x86_64.tar.gz
+cd zim-pro-0.2.1-linux-x86_64
 KIWIX_DATA_DIR=/path/to/zims KIWIX_STATE_DIR=./state ./zim-pro   # http://localhost:8080
 ```
 
 **Python package**, for Python 3.13 on Linux or macOS:
 
 ```sh
-pip install https://github.com/magicstack-llp/zim-pro/releases/download/v0.2.0/zim_pro-0.2.0-py3-none-any.whl
+pip install zim-pro              # or: uvx zim-pro
 KIWIX_DATA_DIR=/path/to/zims KIWIX_STATE_DIR=./state zim-pro   # http://localhost:8080
 ```
 
@@ -266,7 +266,7 @@ Pushing a tag of the form `v1.2.3` runs `.github/workflows/release.yml`:
 1. Lint and tests. Nothing is published if they fail.
 2. In parallel: the Docker image for amd64 and for arm64 (each on its own runner, then joined
    and published to GHCR as `1.2.3`, `1.2` and `latest`), the Python wheel and source
-   archive, and the standalone executables.
+   archive (then uploaded to PyPI), and the standalone executables.
 3. Last, and only if all of those succeeded, the GitHub release, with the executables, the
    wheel, the source archive and their checksums attached.
 
@@ -275,7 +275,7 @@ The package version comes from the tag, and the release notes from that version'
 tagging.
 
 ```sh
-git tag v0.2.0 && git push origin v0.2.0
+git tag v0.2.1 && git push origin v0.2.1
 ```
 
 Every push to `master` and every pull request runs `.github/workflows/ci.yml`: Python lint
