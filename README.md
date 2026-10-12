@@ -1,4 +1,11 @@
-# Zim Pro
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <img src="assets/logo.png" alt="Zim Pro logo: an elephant with a ball" width="180">
+  </picture>
+</p>
+
+<h1 align="center">Zim Pro</h1>
 
 **An offline AI knowledge base.** Zim Pro turns a folder of [ZIM](https://openzim.org) files
 (offline Wikipedia, Stack Exchange, DevDocs, iFixit and the rest of the
