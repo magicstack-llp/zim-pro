@@ -1,0 +1,45 @@
+[project]
+name = "kiwix-updater"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+authors = [
+    { name = "Kuldip Satpute", email = "satputekuldip@gmail.com" }
+]
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.143.0",
+    "httpx>=0.28.1",
+    "libzim>=3.13.1",
+    "markdownify>=1.2.3",
+    "mcp>=2.3.0",
+    "pydantic-settings>=2.15.0",
+    "selectolax>=1.0.0",
+    "uvicorn[standard]>=0.54.0",
+]
+
+[project.scripts]
+kiwix-updater = "kiwix_updater:main"
+
+[build-system]
+requires = ["uv_build>=0.12.24,<0.13.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+    "ruff>=0.17.0",
+]
+
+[tool.ruff]
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
