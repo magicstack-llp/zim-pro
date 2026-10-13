@@ -42,6 +42,14 @@ It replaces `kiwix-serve`.
     <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/updates.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/updates.png" alt="Updates from the Kiwix catalog" width="100%"></a><br><sub>Updates from the Kiwix catalog</sub></td>
     <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/settings.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/settings.png" alt="Settings: downloads, updates and AI providers" width="100%"></a><br><sub>Settings: downloads, updates and AI providers</sub></td>
   </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create.png" alt="Create: your own ZIMs from web links, each with its own schedule" width="100%"></a><br><sub>Create: your own ZIMs from web links, each with its own schedule</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create-link.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create-link.png" alt="A link's settings: rebuild schedule, sitemaps and RSS feeds" width="100%"></a><br><sub>A link's settings: rebuild schedule, sitemaps and RSS feeds</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create-jobs.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create-jobs.png" alt="Build jobs, with what each one saved" width="100%"></a><br><sub>Build jobs, with what each one saved</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/feeds.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/feeds.png" alt="Feeds: ZIMs kept up to date from RSS and Atom feeds" width="100%"></a><br><sub>Feeds: ZIMs kept up to date from RSS and Atom feeds</sub></td>
+  </tr>
 </table>
 
 <table>
@@ -53,7 +61,8 @@ It replaces `kiwix-serve`.
 </table>
 
 The screenshots are in [`screenshots/`](screenshots). The articles and pictures shown in them
-come from Wikipedia and Appropedia, which publish them under Creative Commons licences.
+come from Wikipedia and Appropedia, which publish them under Creative Commons licences. The
+links and feeds shown on the Create and Feeds pages are public sites used as examples.
 
 ## What it does
 

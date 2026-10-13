@@ -14,3 +14,4 @@ packaging
 *.spec
 CHANGELOG.md
 screenshots
+.claude
