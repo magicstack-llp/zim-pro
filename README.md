@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/assets/logo.png" alt="Zim Pro logo: an elephant with a ball" width="180">
+  <img src="assets/logo.png" alt="Zim Pro logo: an elephant with a ball" width="180">
 </p>
 
 <h1 align="center">Zim Pro</h1>
@@ -25,38 +25,38 @@ It replaces `kiwix-serve`.
 ## Screenshots
 
 <p align="center">
-  <a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask.png" alt="Ask AI: an answer written from the library, with numbered citations and the sources beside it" width="100%"></a>
+  <a href="screenshots/ask.png"><img src="screenshots/ask.png" alt="Ask AI: an answer written from the library, with numbered citations and the sources beside it" width="100%"></a>
   <br><sub>Ask AI: an answer written from your books, with citations and the sources beside it</sub>
 </p>
 
 <table>
   <tr>
-    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask-media.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask-media.png" alt="Pictures and videos from the sources, under the answer" width="100%"></a><br><sub>Pictures and videos from the sources, under the answer</sub></td>
-    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/search.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/search.png" alt="Search across every book, with search history" width="100%"></a><br><sub>Search across every book, with search history</sub></td>
+    <td width="50%" valign="top"><a href="screenshots/ask-media.png"><img src="screenshots/ask-media.png" alt="Pictures and videos from the sources, under the answer" width="100%"></a><br><sub>Pictures and videos from the sources, under the answer</sub></td>
+    <td width="50%" valign="top"><a href="screenshots/search.png"><img src="screenshots/search.png" alt="Search across every book, with search history" width="100%"></a><br><sub>Search across every book, with search history</sub></td>
   </tr>
   <tr>
-    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/library.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/library.png" alt="The library" width="100%"></a><br><sub>The library</sub></td>
-    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/markdown.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/markdown.png" alt="Any article as Markdown, with its pictures" width="100%"></a><br><sub>Any article as Markdown, with its pictures</sub></td>
+    <td width="50%" valign="top"><a href="screenshots/library.png"><img src="screenshots/library.png" alt="The library" width="100%"></a><br><sub>The library</sub></td>
+    <td width="50%" valign="top"><a href="screenshots/markdown.png"><img src="screenshots/markdown.png" alt="Any article as Markdown, with its pictures" width="100%"></a><br><sub>Any article as Markdown, with its pictures</sub></td>
   </tr>
   <tr>
-    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/updates.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/updates.png" alt="Updates from the Kiwix catalog" width="100%"></a><br><sub>Updates from the Kiwix catalog</sub></td>
-    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/settings.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/settings.png" alt="Settings: downloads, updates and AI providers" width="100%"></a><br><sub>Settings: downloads, updates and AI providers</sub></td>
+    <td width="50%" valign="top"><a href="screenshots/updates.png"><img src="screenshots/updates.png" alt="Updates from the Kiwix catalog" width="100%"></a><br><sub>Updates from the Kiwix catalog</sub></td>
+    <td width="50%" valign="top"><a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings: downloads, updates and AI providers" width="100%"></a><br><sub>Settings: downloads, updates and AI providers</sub></td>
   </tr>
   <tr>
-    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create.png" alt="Create: your own ZIMs from web links, each with its own schedule" width="100%"></a><br><sub>Create: your own ZIMs from web links, each with its own schedule</sub></td>
-    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create-link.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create-link.png" alt="A link's settings: rebuild schedule, sitemaps and RSS feeds" width="100%"></a><br><sub>A link's settings: rebuild schedule, sitemaps and RSS feeds</sub></td>
+    <td width="50%" valign="top"><a href="screenshots/create.png"><img src="screenshots/create.png" alt="Create: your own ZIMs from web links, each with its own schedule" width="100%"></a><br><sub>Create: your own ZIMs from web links, each with its own schedule</sub></td>
+    <td width="50%" valign="top"><a href="screenshots/create-link.png"><img src="screenshots/create-link.png" alt="A link's settings: rebuild schedule, sitemaps and RSS feeds" width="100%"></a><br><sub>A link's settings: rebuild schedule, sitemaps and RSS feeds</sub></td>
   </tr>
   <tr>
-    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create-jobs.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create-jobs.png" alt="Build jobs, with what each one saved" width="100%"></a><br><sub>Build jobs, with what each one saved</sub></td>
-    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/feeds.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/feeds.png" alt="Feeds: ZIMs kept up to date from RSS and Atom feeds" width="100%"></a><br><sub>Feeds: ZIMs kept up to date from RSS and Atom feeds</sub></td>
+    <td width="50%" valign="top"><a href="screenshots/create-jobs.png"><img src="screenshots/create-jobs.png" alt="Build jobs, with what each one saved" width="100%"></a><br><sub>Build jobs, with what each one saved</sub></td>
+    <td width="50%" valign="top"><a href="screenshots/feeds.png"><img src="screenshots/feeds.png" alt="Feeds: ZIMs kept up to date from RSS and Atom feeds" width="100%"></a><br><sub>Feeds: ZIMs kept up to date from RSS and Atom feeds</sub></td>
   </tr>
 </table>
 
 <table>
   <tr>
-    <td width="60%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask-dark.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask-dark.png" alt="The dark theme" width="100%"></a><br><sub>The dark theme</sub></td>
-    <td width="20%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/phone-ask.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/phone-ask.png" alt="Ask AI on a phone" width="100%"></a><br><sub>On a phone</sub></td>
-    <td width="20%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/phone-library.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/phone-library.png" alt="The library on a phone" width="100%"></a><br><sub>Library on a phone</sub></td>
+    <td width="60%" valign="top"><a href="screenshots/ask-dark.png"><img src="screenshots/ask-dark.png" alt="The dark theme" width="100%"></a><br><sub>The dark theme</sub></td>
+    <td width="20%" valign="top"><a href="screenshots/phone-ask.png"><img src="screenshots/phone-ask.png" alt="Ask AI on a phone" width="100%"></a><br><sub>On a phone</sub></td>
+    <td width="20%" valign="top"><a href="screenshots/phone-library.png"><img src="screenshots/phone-library.png" alt="The library on a phone" width="100%"></a><br><sub>Library on a phone</sub></td>
   </tr>
 </table>
 
