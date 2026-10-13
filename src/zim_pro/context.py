@@ -12,6 +12,7 @@ from .events import EventBus
 from .feeds.manager import FeedManager
 from .library.archive_pool import ArchivePool
 from .library.scanner import Scanner
+from .network import Network
 
 
 @dataclass
@@ -26,6 +27,7 @@ class Context:
     downloads: DownloadManager
     builds: BuildManager
     feeds: FeedManager
+    network: Network
 
     def book(self, book_id: str) -> dict[str, Any] | None:
         return self.db.one("SELECT * FROM books WHERE id = ? AND error IS NULL", (book_id,))

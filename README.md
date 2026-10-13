@@ -40,7 +40,7 @@ It replaces `kiwix-serve`.
   </tr>
   <tr>
     <td width="50%" valign="top"><a href="screenshots/updates.png"><img src="screenshots/updates.png" alt="Updates from the Kiwix catalog" width="100%"></a><br><sub>Updates from the Kiwix catalog</sub></td>
-    <td width="50%" valign="top"><a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings: downloads, updates and AI providers" width="100%"></a><br><sub>Settings: downloads, updates and AI providers</sub></td>
+    <td width="50%" valign="top"><a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings, in sections: AI providers, Ask AI, web search and read aloud" width="100%"></a><br><sub>Settings, in sections: AI providers, Ask AI, web search and read aloud</sub></td>
   </tr>
   <tr>
     <td width="50%" valign="top"><a href="screenshots/create.png"><img src="screenshots/create.png" alt="Create: your own ZIMs from web links, each with its own schedule" width="100%"></a><br><sub>Create: your own ZIMs from web links, each with its own schedule</sub></td>
@@ -140,6 +140,141 @@ mkdir -p zims state
 docker compose up -d
 ```
 
+#### Ready-made files
+
+The [`docker/`](docker) folder has complete compose files for each setup, with their
+values in one `.env` file. Copy the folder, pick a file, and start it:
+
+| File | What you get |
+|---|---|
+| [`compose.yml`](docker/compose.yml) | Zim Pro on its own |
+| [`compose.solver.yml`](docker/compose.solver.yml) | + captcha solver (FlareSolverr) |
+| [`compose.vpn.yml`](docker/compose.vpn.yml) | + VPN (Gluetun) for links and feeds, with the solver inside it |
+| [`compose.vpn-external.yml`](docker/compose.vpn-external.yml) | Uses a Gluetun you already run elsewhere |
+| [`compose.vpn-all.yml`](docker/compose.vpn-all.yml) | All of Zim Pro's traffic through the VPN |
+| [`compose.zimit.yml`](docker/compose.zimit.yml) | + browser capture (Zimit) |
+| [`compose.full.yml`](docker/compose.full.yml) | VPN, solver and browser capture together |
+
+```sh
+cd docker
+cp .env.example .env             # then edit it
+mkdir -p zims state
+docker compose -f compose.vpn.yml up -d
+```
+
+[`docker/README.md`](docker/README.md) says which to choose.
+
+#### Full example: with a VPN, a captcha solver and browser capture
+
+Everything Zim Pro can use, in one file. Only the `zim-pro` service is required: delete
+the parts you do not want. The comments say which setting each part goes with, and
+[Sites that block or check visitors](#sites-that-block-or-check-visitors-captcha-solver-and-vpn)
+and [Browser capture](#browser-capture-zimit) explain them.
+
+```yaml
+services:
+  zim-pro:
+    image: ghcr.io/magicstack-llp/zim-pro:latest
+    container_name: zim-pro
+    restart: unless-stopped
+    user: "1000:1000"                # your own uid:gid, from `id -u` and `id -g`
+    ports:
+      - "8083:8080"
+    extra_hosts:
+      # Lets Ask AI reach a model server on this machine (Ollama, LM Studio, llama.cpp)
+      # at http://host.docker.internal:<port>/v1
+      - "host.docker.internal:host-gateway"
+    environment:
+      KIWIX_ADMIN_TOKEN: change-me   # optional: required for changes and /mcp when set
+    volumes:
+      - ./zims:/data                 # your folder of .zim files
+      - ./state:/state               # the database, uploads and pictures
+      # Browser capture (Zimit) only. This gives the container control of Docker on this
+      # machine, so leave these two parts out unless you need it.
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "999"                        # the docker group's gid: getent group docker
+    depends_on:
+      - gluetun
+    # --- Network, when Gluetun is used -----------------------------------------------------
+    # Gluetun started from THIS file: nothing to add. Zim Pro reaches it by name
+    # (http://gluetun:8888) and only the pages for links and feeds go through the VPN.
+    #
+    # Gluetun started somewhere else (another compose file, or `docker run`): Zim Pro must
+    # join the network Gluetun is on, or the name `gluetun` does not resolve. Find it with
+    #   docker inspect gluetun -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+    # then uncomment these lines and the `networks:` block at the foot of this file.
+    # networks:
+    #   - default
+    #   - vpn
+    #
+    # To send EVERYTHING Zim Pro does through the VPN (catalog, ZIM downloads, Ask AI too),
+    # uncomment the line below instead. Then also: move `ports:` from this service to the
+    # gluetun service, remove `extra_hosts:` here, and use http://localhost:8000 and
+    # http://localhost:8191 in Settings (leave Proxy address empty). The web interface is
+    # then unreachable whenever the VPN container is down.
+    # network_mode: "service:gluetun"
+
+  # VPN: pages for links and feeds are fetched through it. The web interface, the catalog
+  # and ZIM downloads keep using your own connection.
+  #   Settings -> Network -> Proxy address          = http://gluetun:8888
+  #   Settings -> Network -> Control server address = http://gluetun:8000
+  #   Settings -> Network -> Control server API key = the key set below
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # Your provider's details: https://github.com/qdm12/gluetun-wiki
+      VPN_SERVICE_PROVIDER: mullvad
+      VPN_TYPE: wireguard
+      WIREGUARD_PRIVATE_KEY: change-me
+      WIREGUARD_ADDRESSES: 10.64.0.2/32
+      SERVER_COUNTRIES: Netherlands  # a country, not one server, so the address can change
+      HTTPPROXY: "on"                # the proxy Zim Pro uses, on port 8888
+      # The control server, on port 8000, and the key Zim Pro must send to it.
+      # Make a long random one: openssl rand -hex 24
+      HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE: '{"auth":"apikey","apikey":"change-me"}'
+      TZ: Etc/UTC
+
+  # Captcha solver: gets past "checking your browser" pages. It runs inside the VPN's
+  # network, so it leaves from the same address as Zim Pro's requests.
+  #   Settings -> Network -> Solver address = http://gluetun:8191
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+    environment:
+      LOG_LEVEL: info
+      TZ: Etc/UTC
+
+# The network Gluetun is on, when it is not started from this file (see "Network" above).
+# networks:
+#   vpn:
+#     external: true
+#     name: gluetun_default        # the name `docker inspect` gave
+```
+
+Without the VPN: remove the `gluetun` service and the `depends_on` that names it, remove
+`network_mode` and `depends_on` from `flaresolverr`, and set **Solver address** to
+`http://flaresolverr:8191`.
+
+**If Gluetun already runs somewhere else** (its own compose file, or `docker run`): leave
+the `gluetun` and `flaresolverr` services out of this file, remove `depends_on`, and
+uncomment the two `networks:` blocks, so that Zim Pro joins the network Gluetun is on.
+Without that, **Test connection** answers that `gluetun` cannot be found. Keep `default`
+in the list: it is what the container uses for everything else.
+
+Then fill in **Settings → Network** and press **Test connection** there. Nothing leaves
+through the VPN or the solver until their addresses are saved in Settings.
+
 ### Everyday commands
 
 | To | docker compose | docker run |
@@ -154,15 +289,17 @@ Removing the container loses nothing: the books are in `zims` and the settings, 
 download progress are in `state`. A download in progress when the container stops carries on
 from where it was when it starts again.
 
-To stay on one version, use a version tag in place of `latest`, such as `:0.3.0` or `:0.3`.
+To stay on one version, use a version tag in place of `latest`, such as `:0.4.0` or `:0.4`.
 
 ### Build the image yourself
 
-The `compose.yml` in this repository builds from source:
+The `compose.yml` in this repository builds the image from source. It is the full setup
+(VPN, captcha solver and browser capture), so it needs the VPN values in `.env`; see
+[`docker/.env.example`](docker/.env.example). To build and run Zim Pro alone:
 
 ```sh
-mkdir -p state
-docker compose up -d --build     # http://localhost:8083
+mkdir -p zims state
+docker compose up -d --build --no-deps zim-pro     # http://localhost:8083
 ```
 
 It mounts `/mnt/storage/Media/Kiwix/data` as the library; change that path to your own
@@ -176,8 +313,8 @@ it, with the web app included in both.
 **Standalone executable** for Linux (x86-64 and arm64). One file, no Python needed:
 
 ```sh
-tar -xzf zim-pro-0.3.0-linux-x86_64.tar.gz
-cd zim-pro-0.3.0-linux-x86_64
+tar -xzf zim-pro-0.4.0-linux-x86_64.tar.gz
+cd zim-pro-0.4.0-linux-x86_64
 KIWIX_DATA_DIR=/path/to/zims KIWIX_STATE_DIR=./state ./zim-pro   # http://localhost:8080
 ```
 
@@ -207,7 +344,7 @@ For UI work, run `npm run dev` in `web/` (set `KIWIX_BACKEND` if the server is n
 | `KIWIX_DATA_DIR` | `/data` | Folder of `.zim` files (scanned recursively) |
 | `KIWIX_STATE_DIR` | `/state` | Where the SQLite database lives |
 | `KIWIX_HOST` / `KIWIX_PORT` | `0.0.0.0` / `8080` | Listen address |
-| `KIWIX_ADMIN_TOKEN` | unset | If set, changes and `/mcp` need `Authorization: Bearer <token>` |
+| `KIWIX_ADMIN_TOKEN` | unset | If set, changes need `Authorization: Bearer <token>`, and `/mcp` needs the token or an API key made in Settings |
 | `KIWIX_CATALOG_URL` | Kiwix OPDS feed | Catalog to check for updates |
 
 Download limits, the update schedule and policies are set in the web UI under Settings.
@@ -302,10 +439,29 @@ inside the ZIM, linked from its first page. A **ZIM** file is checked and added 
   searched; there is no OCR.
 - Books protected by DRM cannot be converted.
 
+### Categories and pictures
+
+Every link, uploaded book and feed collection has a **Category** and a **Picture**.
+
+- **Category** decides where the ZIM is filed: the categories you make show as filters in
+  the Library, in Search and in Ask AI, beside Kiwix's own. The dropdown lists your own
+  categories and the ones already in your library (Wikipedia, DevDocs and so on), so a ZIM
+  you make can sit with the books Kiwix publishes. Pick one from the dropdown, add
+  one on the spot with **+ New category…**, or press **Manage** to add, rename and remove
+  them. Renaming a category moves everything filed under it; removing one sends its ZIMs
+  back to **My ZIMs**. Changing a ZIM's category takes effect at once, without building it
+  again. The CSV for links has a `category` column.
+- **Picture** is the icon the ZIM is shown with. Left empty, a link uses the site's own icon
+  (its touch icon if it has one, then its favicon, then the picture it gives for sharing),
+  a book uses its cover, and a ZIM with none of those gets a tile with the first letter of
+  its title. Choose a PNG, JPEG, WebP, GIF or ICO file to use your own; it goes into the ZIM
+  the next time the ZIM is made. Browser captures (Zimit) and ZIM files you upload keep the
+  picture they came with.
+
 ### How the ZIMs are made
 
 Pages are fetched several at a time, cleaned and converted on worker threads, and compressed
-and indexed on libzim's own threads (Settings → Create sets how many). Before a ZIM enters the
+and indexed on libzim's own threads (Settings → Create and Feeds sets how many). Before a ZIM enters the
 library it is opened again and compared with what was prepared: the page count, every file,
 and a sample of pages byte for byte. Each job keeps a list of anything that failed or was
 skipped, with the reason. Only real pages are marked as articles and the full-text index is
@@ -331,9 +487,15 @@ The first capture downloads the Zimit image (about 1.5 GB).
 
 ### Sites that block or check visitors: captcha solver and VPN
 
-Two optional helper containers are in `compose.yml`, commented out. They apply to pages
+Two optional helper containers come with the compose files in [`docker/`](docker):
+`compose.solver.yml` has the solver, `compose.vpn.yml` the VPN with the solver inside it.
+They apply to pages
 fetched by the built-in crawler and by Feeds, not to Zimit captures, the catalog or ZIM
-downloads. Both are set under **Settings → Create**.
+downloads. Each has its own section in **Settings** (**VPN** and **Captcha solver**), with a
+switch to turn it off without losing its addresses. Once set up, both also appear at the
+foot of the menu: a status light each (green working, amber busy, red not answering,
+grey off), the same switches, and an **i** that opens the details: the VPN's address,
+country and network, and **Change IP**.
 
 **Captcha solver ([FlareSolverr](https://github.com/FlareSolverr/FlareSolverr)).** Some sites
 answer a plain request with a "checking your browser" page (Cloudflare's "Just a moment…",
@@ -342,25 +504,50 @@ a real browser, and then carries on with the clearance it earned, so pictures an
 pages are fetched the normal way. Without one, such pages are listed as failed with a note
 saying why.
 
-- Uncomment the `flaresolverr` service and set **Captcha solver** to
-  `http://flaresolverr:8191`.
+- Start the `flaresolverr` service and set **Solver address** to
+  `http://flaresolverr:8191`. Settings shows whether it answers, and its version.
 - It gets past browser checks. It does **not** solve picture or checkbox captchas
   (reCAPTCHA, hCaptcha, Turnstile widgets), and a site can still refuse it.
 - It is slow (a browser per page) and uses a few hundred MB of memory.
 
 **VPN ([Gluetun](https://github.com/qdm12/gluetun)).** Gluetun connects to your VPN provider
-and offers an HTTP proxy. Set **Proxy** to `http://gluetun:8888` and every page fetched for
-a link or a feed leaves through the VPN, while the web interface and everything else keep
-using your own connection.
+and offers an HTTP proxy. Set **Proxy address** to `http://gluetun:8888` and every page
+fetched for a link or a feed leaves through the VPN, while the web interface and everything
+else keep using your own connection.
 
-- Uncomment the `gluetun` service and fill in your provider's details; the
+- Start the `gluetun` service and fill in your provider's details; the
   [Gluetun wiki](https://github.com/qdm12/gluetun-wiki) has them for each provider.
   `HTTPPROXY: "on"` must stay.
 - **Using both:** a clearance is tied to the address that earned it, so the solver must
-  leave through the same VPN. Use the second `flaresolverr` block in `compose.yml` (the one
-  with `network_mode: "service:gluetun"`) in place of the first, and set **Captcha solver**
+  leave through the same VPN. `docker/compose.vpn.yml` does this (the `flaresolverr` service has
+  `network_mode: "service:gluetun"`); set **Solver address**
   to `http://gluetun:8191`.
 - The proxy must be `http://` or `https://`; SOCKS is not supported.
+
+**Test connection**, in both sections, tries the addresses as typed, before you save them.
+For the VPN it asks the control server for its state and fetches a page through the proxy
+(from cloudflare.com, which answers with the address it was asked from), then says whether
+the two agree. For the solver it asks whether FlareSolverr is there and ready.
+
+**Seeing and changing the VPN's address.** Gluetun has a control server on port 8000. Give
+Zim Pro its address and Settings and the menu show whether the VPN is connected, the public
+IP address it has, and its country, region and network.
+
+- Set **Control server address** to `http://gluetun:8000`. The control server asks who is
+  calling: the compose files set an API key with `HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE`; put
+  the same key in **Control server API key**. A name and password work too, if that is how
+  your container is set up.
+- **Change IP now**, in Settings (**Change IP** behind the **i** in the menu), stops the VPN and starts it again, which
+  is how Gluetun picks another server. The new address is shown when it is up. Give Gluetun
+  more than one server to choose from (a country, not a single host) or it will come back
+  with the same address, and Zim Pro will say so.
+- **Change IP when a site says too many requests** does this by itself during a build. A
+  large site can refuse an address (HTTP 429) however politely it is asked; with the switch
+  on, Zim Pro reconnects the VPN and asks for the page again from the new address, without
+  the long wait. It changes address at most once a minute, so a site that refuses every
+  address is still waited for in the ordinary way. While the VPN reconnects (a few
+  seconds), everything that goes through it waits: other builds and feed syncs included.
+- The keys and passwords are stored on the server and never sent back to the browser.
 
 Getting past a site's checks does not change what you are allowed to copy: its terms still
 apply.
@@ -394,16 +581,16 @@ every article, newest first, by month.
 - The **Syncs** tab is the queue: active, paused, finished and failed, with what each sync
   found. The last hundred are kept.
 
-**Settings → Feeds** has the master switch for scheduled syncing, how many syncs run at
-once, and the defaults for new collections. The proxy and captcha solver under Settings →
-Create apply to feeds too.
+**Settings → Create and Feeds** has the master switch for scheduled syncing, how many syncs
+run at once, and the defaults for new collections. The VPN and captcha solver under
+Settings → Network apply to feeds too.
 
 Feed ZIMs appear in the library under "My ZIMs" and are searched and cited by Ask AI like
 any other book.
 
 ## Ask AI
 
-Add one or more providers under Settings → AI providers, then pick a default model. Any
+Add one or more providers under Settings → AI, then pick a default model. Any
 server with the OpenAI `/chat/completions` API works: OpenAI, Google Gemini, Perplexity,
 OpenRouter, Groq, Ollama, LM Studio, llama.cpp, vLLM. The model can be switched per message
 in the chat box.
@@ -445,7 +632,7 @@ Chats are stored in the database.
 Every prompt carries formatting rules, and answers are passed through a repair step before
 they are shown (unclosed code blocks, leaked reasoning, malformed lists, tables and citations),
 since small models often get Markdown wrong. Your own standing instructions can be added
-under Settings → Ask AI.
+under Settings → AI.
 
 **Web search** (off by default) is used when the library has no good match, or for every
 question while the Internet button in the chat box is on. Either:
@@ -468,6 +655,28 @@ Tools: `list_books`, `search`, `suggest`, `get_article`, `get_article_outline`,
 `list_updates`, and `start_update` (off until enabled in Settings).
 
 For a stdio client, run `zim-pro mcp` with `KIWIX_DATA_DIR` and `KIWIX_STATE_DIR` set.
+
+**API keys.** With no key and no admin token, anyone who can reach the server can use
+`/mcp`. To lock it, open **Settings → MCP** and press **Generate key**:
+
+- The key (it starts with `zp_mcp_`) is shown once, with a button to copy it and the
+  `claude mcp add` command already filled in. Clients send it as
+  `Authorization: Bearer <key>`.
+- Only a SHA-256 fingerprint of the key is stored, so neither the database nor a backup of
+  it can give a key back. A lost key is replaced, not recovered.
+- Each key has a name, the date it was made and when it was last used. **Revoke** stops it
+  at once. Make one key per app, so one can be revoked without touching the others.
+- As soon as one key exists, `/mcp` answers only to a key (or to `KIWIX_ADMIN_TOKEN`, if
+  that is set). Revoking the last key opens it again.
+
+The keys guard `/mcp` only. The web interface and its API are guarded by
+`KIWIX_ADMIN_TOKEN`: without it, anyone who can open the web interface can also make keys,
+so set the token if the server is reachable by people you do not trust.
+
+```sh
+claude mcp add --transport http zim-pro http://localhost:8083/mcp \
+  --header "Authorization: Bearer zp_mcp_..."
+```
 
 ## Notes
 
@@ -507,7 +716,7 @@ The package version comes from the tag, and the release notes from that version'
 tagging.
 
 ```sh
-git tag v0.3.0 && git push origin v0.3.0
+git tag v0.4.0 && git push origin v0.4.0
 ```
 
 Every push to `master` and every pull request runs `.github/workflows/ci.yml`: Python lint

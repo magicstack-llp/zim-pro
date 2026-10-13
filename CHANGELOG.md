@@ -7,6 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-13
+
+### Added
+
+- **Categories for the ZIMs you make.** Links, uploaded books and feed collections have a
+  category dropdown, and a list of categories you can add to, rename and remove. Your
+  categories show as filters in the Library, Search and Ask AI. Links CSV has a `category`
+  column.
+- **A picture for every ZIM made here.** Choose your own for a link, a book or a feed
+  collection; otherwise the site's best icon is used (touch icon, favicon, then its share
+  picture). The Create and Feeds pages show each ZIM's picture.
+- **VPN and captcha solver have their own Settings sections**, each with a switch to turn
+  it off without losing its addresses, and a live status.
+- **Gluetun control server.** With its address and key, Settings and the menu show whether
+  the VPN is connected, its public IP address, country, region and network, and a
+  **Change IP** button reconnects the VPN for another address.
+- **Change IP when a site says too many requests.** A switch that reconnects the VPN when
+  a site answers HTTP 429 and asks for the page again from the new address.
+- The foot of the menu shows the VPN and the captcha solver once they are set up: a
+  status light and a switch each, and an "i" that opens the details (the VPN's IP address,
+  country and network, and Change IP).
+- A `docker/` folder of ready-to-run compose files, one per setup (on its own, with the
+  captcha solver, with a VPN, with a VPN that already runs elsewhere, everything through
+  the VPN, with browser capture, and all of it), sharing one `.env`.
+- README: a full `docker compose` example with the VPN, the captcha solver and browser
+  capture together.
+- The `compose.yml` at the top of the repository builds from source with the full setup:
+  VPN, captcha solver and browser capture, with its values in `.env`.
+
+- The category dropdown also lists the categories already in the library, so a ZIM made
+  here can be filed beside the books Kiwix publishes.
+- **Test connection** for the VPN and for the captcha solver: tries the addresses as typed,
+  saved or not, and says what answered.
+- **API keys for MCP.** Generate, name and revoke keys in Settings. A key is shown once and
+  only its SHA-256 fingerprint is stored; once a key exists, `/mcp` answers only to a key.
+- **About**, in Settings: version, who makes Zim Pro, what the server runs on, where it
+  keeps its files, links, and a check for a newer release.
+
+### Changed
+
+- **Settings is split into sections** (General, AI, Create and Feeds, Network, MCP, About)
+  with a menu down the side, and a row of tabs on a phone. Links into Settings open the
+  right section.
+- Small site icons are drawn to fill the ZIM's picture, not left as a speck in the middle.
+- A ZIM made by browser capture is filed under My ZIMs, not Other.
+
+### Fixed
+
+- Making a ZIM when the library folder is not writable (Docker creates a missing folder
+  as root) now says so, with the fix, instead of "Unable to write ZIM file".
+- Escape closes only the top dialog when one dialog was opened from another.
+
 ## [0.3.0] - 2026-10-13
 
 ### Added
@@ -125,7 +177,8 @@ First release.
 - **Packaging.** A Docker image for amd64 and arm64 on GHCR, and a Python wheel with the web
   app inside, both published by a release workflow when a version tag is pushed.
 
-[Unreleased]: https://github.com/magicstack-llp/zim-pro/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/magicstack-llp/zim-pro/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/magicstack-llp/zim-pro/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/magicstack-llp/zim-pro/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/magicstack-llp/zim-pro/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/magicstack-llp/zim-pro/compare/v0.1.0...v0.2.0

@@ -7,12 +7,14 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
+from ..builder import icons
 from ..builder.crawler import _decode
 from ..builder.writer import BuildError
 from ..context import Context, get_context, require_admin
 from ..downloads.engine import USER_AGENT
 from ..feeds import parse
-from .build import MODES, RATE_UNITS, clean_addresses
+from .build import MODES, RATE_UNITS, _refile, clean_addresses
+from .organise import use_category
 
 router = APIRouter(prefix="/api/feeds", dependencies=[Depends(require_admin)])
 
@@ -34,6 +36,7 @@ class FeedBody(BaseModel):
     rate_unit: str = "second"
     language: str = Field(default="", max_length=10)
     notes: str = Field(default="", max_length=1000)
+    category: str = Field(default="", max_length=80)
 
 
 def _clean(body: FeedBody) -> tuple[dict[str, Any], list[str]]:
@@ -100,15 +103,20 @@ def list_feeds(ctx: Context = Depends(get_context)) -> dict[str, Any]:
 
 
 @router.post("")
-def add_feed(body: FeedBody, ctx: Context = Depends(get_context)) -> dict[str, Any]:
+def add_feed(
+    body: FeedBody, hold: bool = False, ctx: Context = Depends(get_context)
+) -> dict[str, Any]:
+    """Add a collection and fill it. ``hold``: the caller starts the first sync itself,
+    once it has also sent the collection's picture."""
     data, sources = _clean(body)
+    data["category"] = use_category(ctx, data["category"])
     cursor = ctx.db.execute(
         f"INSERT INTO feeds ({', '.join(data)}) VALUES ({', '.join(':' + k for k in data)})", data
     )
     _set_sources(ctx, cursor.lastrowid, sources)
-    if data["enabled"]:
+    if data["enabled"] and not hold:
         _sync(ctx, cursor.lastrowid)  # a new collection is filled straight away
-    return _listing(ctx)
+    return {**_listing(ctx), "id": cursor.lastrowid}
 
 
 @router.put("/{feed_id}")
@@ -116,10 +124,12 @@ def edit_feed(feed_id: int, body: FeedBody, ctx: Context = Depends(get_context))
     data, sources = _clean(body)
     if ctx.db.one("SELECT id FROM feeds WHERE id = ?", (feed_id,)) is None:
         raise HTTPException(404, "No such feed collection")
+    data["category"] = use_category(ctx, data["category"])
     assignments = ", ".join(f"{key} = :{key}" for key in data)
     ctx.db.execute(f"UPDATE feeds SET {assignments} WHERE id = :id", {**data, "id": feed_id})
     _set_sources(ctx, feed_id, sources)
-    return _listing(ctx)
+    _refile(ctx)
+    return {**_listing(ctx), "id": feed_id}
 
 
 @router.delete("/{feed_id}")
@@ -136,6 +146,8 @@ def delete_feed(feed_id: int, ctx: Context = Depends(get_context)) -> dict[str, 
         ctx.db.execute(f"DELETE FROM {table} WHERE feed_id = ?", (feed_id,))
     ctx.db.execute("DELETE FROM feeds WHERE id = ?", (feed_id,))
     ctx.feeds.forget(feed_id)
+    icons.path(ctx.config.state_dir, "feed", feed_id).unlink(missing_ok=True)
+    _refile(ctx)
     return _listing(ctx)
 
 

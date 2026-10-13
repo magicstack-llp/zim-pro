@@ -87,8 +87,7 @@ class FeedManager(BuildManager):
                 reporter,
                 workers=self._workers(),
                 rate=per_second(feed["rate_limit"], feed["rate_unit"]),
-                proxy=str(self.db.get_setting("build_proxy")),
-                solver=str(self.db.get_setting("captcha_solver_url")),
+                **self._route(),
                 rebuild=bool(row["params"].get("rebuild")),
                 transport=self.transport,
             )
@@ -98,6 +97,7 @@ class FeedManager(BuildManager):
                 report: dict[str, Any] = {"unchanged": True, "title": sync.feed["title"]}
             else:
                 meta.name = name = self._name_for("feeds", feed, meta.name)
+                self._own_icon(stage, "feed", feed["id"])
                 report = await self._write(stage, meta, reporter)
             report.update(outcome)
         except BuildError as exc:

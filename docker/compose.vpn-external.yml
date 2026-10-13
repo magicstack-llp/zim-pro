@@ -1,0 +1,43 @@
+# Zim Pro: with a Gluetun that already runs elsewhere
+#
+# For a Gluetun started from another compose file or with `docker run`. Zim Pro joins the
+# network Gluetun is on, so that the name `gluetun` resolves. Find that network with
+#   docker inspect gluetun -f '{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}'
+# and put it in .env as VPN_NETWORK. Your Gluetun needs HTTPPROXY=on, and for the status
+# and Change IP, a control server key (HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE).
+# Replace `gluetun` below with your container's name if it differs.
+#
+# Then, in Settings -> Network:
+#   Proxy address           http://gluetun:8888
+#   Control server address  http://gluetun:8000
+#   Control server API key  the key your Gluetun was given
+#   Solver address          http://gluetun:8191   (if FlareSolverr runs inside it)
+#
+# Values come from .env beside this file (see .env.example). Start with:
+#   docker compose -f compose.vpn-external.yml up -d
+
+services:
+  zim-pro:
+    image: ghcr.io/magicstack-llp/zim-pro:${ZIM_PRO_TAG:-latest}
+    container_name: zim-pro
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "${PORT:-8083}:8080"
+    extra_hosts:
+      # Lets Ask AI reach a model server on this machine (Ollama, LM Studio, llama.cpp)
+      # at http://host.docker.internal:<port>/v1
+      - "host.docker.internal:host-gateway"
+    environment:
+      KIWIX_ADMIN_TOKEN: ${ADMIN_TOKEN:-}   # empty: no token asked for
+    volumes:
+      - ${ZIM_DIR:-./zims}:/data            # your folder of .zim files
+      - ${STATE_DIR:-./state}:/state        # the database, uploads and pictures
+    networks:
+      - default                             # for everything that does not use the VPN
+      - vpn
+
+networks:
+  vpn:
+    external: true
+    name: ${VPN_NETWORK:?set VPN_NETWORK in .env}

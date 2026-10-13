@@ -235,6 +235,18 @@ CREATE TABLE IF NOT EXISTS searches (
     category TEXT NOT NULL DEFAULT '',
     UNIQUE (query, book, category)
 );
+CREATE TABLE IF NOT EXISTS categories (
+    name TEXT PRIMARY KEY COLLATE NOCASE,
+    created REAL NOT NULL DEFAULT (unixepoch('subsec'))
+);
+CREATE TABLE IF NOT EXISTS mcp_keys (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    hint TEXT NOT NULL,
+    digest TEXT NOT NULL UNIQUE,
+    created REAL NOT NULL DEFAULT (unixepoch('subsec')),
+    last_used REAL
+);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
@@ -297,6 +309,13 @@ class Database:
         ):
             if column not in link_columns:
                 self._conn.execute(f"ALTER TABLE links ADD COLUMN {column} {kind}")
+        # What a ZIM made here is filed under, and a picture of the user's own for it
+        # (the time it was set; null when the site's or the book's own is used).
+        for table in ("links", "uploads", "feeds"):
+            have = {row["name"] for row in self._conn.execute(f"PRAGMA table_info({table})")}
+            for column, kind in (("category", "TEXT NOT NULL DEFAULT ''"), ("icon", "REAL")):
+                if column not in have:
+                    self._conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
         build_columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(builds)")}
         if "params" not in build_columns:
             self._conn.execute("ALTER TABLE builds ADD COLUMN params TEXT NOT NULL DEFAULT '{}'")

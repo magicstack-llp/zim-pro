@@ -30,9 +30,19 @@ def book_updates(db: Database) -> list[dict[str, Any]]:
         )
     }
 
+    # Made here, whatever category they were filed under: updated from Create and Feeds.
+    made_here = {
+        row["book_id"]
+        for sql in (
+            "SELECT book_id FROM links WHERE book_id != ''",
+            "SELECT book_id FROM feeds WHERE book_id != ''",
+            "SELECT book_id FROM uploads WHERE book_id != '' AND kind != 'zim'",
+        )
+        for row in db.all(sql)
+    }
     result = []
     for book in db.all("SELECT * FROM books ORDER BY title COLLATE NOCASE"):
-        if book["category"] == "custom":
+        if book["category"] == "custom" or book["id"] in made_here:
             continue  # made here, not published by Kiwix: updated from the Create page
         latest = _latest(by_stem.get(book["id"], [])) or _latest(
             by_name.get((book["name"], book["flavour"]), [])

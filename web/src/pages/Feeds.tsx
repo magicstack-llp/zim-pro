@@ -1,10 +1,11 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Dialog } from "../Dialog";
+import { bookIconOf, CategorySelect, IconPicker, NO_ICON_CHANGE, ownIcon, saveIcon, sourceIcon } from "../Filing";
 import { api, authHeaders, post, readUrl, type Build } from "../lib/api";
-import { ago, bytes, count, day } from "../lib/format";
+import { ago, bytes, categoryLabel, count, day } from "../lib/format";
 import { useData, useLive } from "../lib/live";
-import { Empty, ErrorNote, PageHeader, Progress, Tabs } from "../ui";
+import { BookIcon, Empty, ErrorNote, PageHeader, Progress, Tabs } from "../ui";
 import { Segmented } from "./AiSettings";
 import { busy, every, IntervalInput, JobLog, PauseButton, PHASES, RateInput, Row, Switch } from "./Create";
 
@@ -31,6 +32,8 @@ interface FeedRow {
   enabled: boolean;
   rate_limit: number;
   rate_unit: "second" | "minute";
+  category: string;
+  icon: number | null;
   book_id: string;
   book_title: string | null;
   book_size: number | null;
@@ -56,6 +59,10 @@ interface Draft {
   rate_unit: "second" | "minute";
   language: string;
   notes: string;
+  category: string;
+  icon?: number | null;
+  book_id?: string;
+  book_title?: string | null;
 }
 interface Found {
   url: string;
@@ -102,6 +109,10 @@ const toDraft = (feed: FeedRow): Draft => ({
   rate_unit: feed.rate_unit,
   language: feed.language,
   notes: feed.notes,
+  category: feed.category,
+  icon: feed.icon,
+  book_id: feed.book_id,
+  book_title: feed.book_title,
 });
 
 function FeedDialog({ initial, onClose, onSaved }: { initial: Draft; onClose: () => void; onSaved: () => void }) {
@@ -111,6 +122,7 @@ function FeedDialog({ initial, onClose, onSaved }: { initial: Draft; onClose: ()
   const [lookup, setLookup] = useState("");
   const [looking, setLooking] = useState(false);
   const [found, setFound] = useState<Found[] | null>(null);
+  const [icon, setIcon] = useState(NO_ICON_CHANGE);
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((current) => ({ ...current, [key]: value }));
   const lines = draft.sources.split("\n").map((line) => line.trim()).filter(Boolean);
   const add = (url: string) => !lines.includes(url) && set("sources", [...lines, url].join("\n"));
@@ -126,8 +138,15 @@ function FeedDialog({ initial, onClose, onSaved }: { initial: Draft; onClose: ()
   const save = () => {
     setSaving(true);
     setProblem(null);
-    const { id, ...body } = draft;
-    api(id ? `/api/feeds/${id}` : "/api/feeds", { method: id ? "PUT" : "POST", body: JSON.stringify(body) })
+    const { id, icon: _icon, book_id: _book, book_title: _title, ...body } = draft;
+    // A new collection is filled as soon as it is saved. With a picture to send first, the
+    // server is asked to wait, and the first sync is started once the picture is there.
+    const held = !id && !!icon.file;
+    api<{ id: number }>(id ? `/api/feeds/${id}` : `/api/feeds${held ? "?hold=true" : ""}`, { method: id ? "PUT" : "POST", body: JSON.stringify(body) })
+      .then(async (saved) => {
+        await saveIcon("feed", saved.id, icon);
+        if (held && body.enabled) await post(`/api/feeds/${saved.id}/sync`);
+      })
       .then(onSaved)
       .catch((reason) => setProblem(String(reason.message)))
       .finally(() => setSaving(false));
@@ -195,6 +214,12 @@ function FeedDialog({ initial, onClose, onSaved }: { initial: Draft; onClose: ()
         </ul>
       )}
       <div className="mt-2 divide-y divide-zinc-100 dark:divide-zinc-800">
+        <Row label="Category" hint="Where the ZIM is filed in the Library, in Search and in Ask AI.">
+          <CategorySelect value={draft.category} onChange={(value) => set("category", value)} />
+        </Row>
+        <Row label="Picture" hint="">
+          <IconPicker own={ownIcon("feed", draft)} fallback={bookIconOf(draft)} title={draft.title || "Feeds"} choice={icon} onChange={setIcon} hint={draft.book_id ? "Yours replaces the site's own icon the next time the ZIM is written." : "Empty: the first site's own icon is used, or a tile with the title's first letter."} />
+        </Row>
         <Row label="Sync on schedule" hint={draft.enabled && draft.interval_minutes > 0 ? `Checked for new articles ${every(draft.interval_minutes)}.` : "Only when you press Sync."}>
           <Switch checked={draft.enabled} onChange={(value) => set("enabled", value)} label="Sync on schedule" />
         </Row>
@@ -374,6 +399,7 @@ function Collections({ runs, onProblem }: { runs: Build[]; onProblem: (message: 
     rate_unit: "second",
     language: "",
     notes: "",
+    category: "",
   };
   const exportOpml = async () => {
     const reply = await fetch("/api/feeds/opml", { headers: authHeaders() });
@@ -421,10 +447,12 @@ function Collections({ runs, onProblem }: { runs: Build[]; onProblem: (message: 
           return (
             <li key={feed.id} className="card p-4">
               <div className="flex flex-wrap items-start gap-3">
+                <BookIcon key={sourceIcon("feed", feed) ?? "none"} src={sourceIcon("feed", feed)} title={feed.title || feed.sources[0]?.title || "Feeds"} size={40} />
                 <div className="min-w-0 flex-1 basis-64">
                   <div className="truncate font-medium">{feed.title || feed.sources[0]?.title || feed.sources[0]?.url || "Empty collection"}</div>
                   <div className="muted truncate text-xs">{feed.sources.length === 1 ? feed.sources[0].url : `${feed.sources.length} feeds: ${feed.sources.map((source) => source.title || new URL(source.url).hostname).join(", ")}`}</div>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {feed.category && <span className="badge bg-brand-50 text-brand-700 dark:bg-brand-900/50 dark:text-brand-100">{categoryLabel(feed.category)}</span>}
                     <span className="badge">{scheduled ? `Syncs ${every(feed.interval_minutes)}` : "Manual sync"}</span>
                     <span className="badge">{feed.full_text ? (feed.mode === "clean" ? "Full article, cleaned" : "Full page") : "Feed text only"}</span>
                     <span className="badge">{feed.keep > 0 ? `Keeps ${count(feed.keep)}` : "Keeps everything"}</span>
@@ -611,6 +639,7 @@ function Runs({ runs, onProblem }: { runs: Build[]; onProblem: (message: string 
                       {run.failed > 0 && <span className="text-amber-700 dark:text-amber-400"> · {count(run.failed)} failed</span>}
                       {report.slowed ? " · slowed down at a site's request" : ""}
                       {report.solved ? ` · ${count(report.solved)} browser ${report.solved === 1 ? "check" : "checks"} solved` : ""}
+                      {report.address_changes ? ` · VPN address changed ${report.address_changes === 1 ? "once" : `${count(report.address_changes)} times`}` : ""}
                     </p>
                   )}
                   {run.state === "failed" && <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">{run.error}</p>}

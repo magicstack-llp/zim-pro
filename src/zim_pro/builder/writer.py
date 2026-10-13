@@ -10,6 +10,7 @@ build cannot silently lose pages.
 import hashlib
 import io
 import json
+import os
 import re
 import shutil
 from dataclasses import dataclass, field
@@ -201,7 +202,11 @@ def make_icon(image: bytes | None, title: str) -> bytes:
         try:
             picture = Image.open(io.BytesIO(image))
             picture = picture.convert("RGBA")
-            picture.thumbnail((48, 48), Image.LANCZOS)
+            # Fill the tile whatever the picture's size: a 16-pixel favicon is drawn larger
+            # rather than left as a speck in the middle.
+            scale = 48 / max(picture.size)
+            size = (max(1, round(picture.width * scale)), max(1, round(picture.height * scale)))
+            picture = picture.resize(size, Image.LANCZOS)
             tile = Image.new("RGBA", (48, 48), (255, 255, 255, 255))
             offset = ((48 - picture.width) // 2, (48 - picture.height) // 2)
             tile.paste(picture, offset, picture)
@@ -239,6 +244,14 @@ def write_zim(
         raise BuildError("There is nothing to put in the ZIM: no page could be read.")
     main = stage.main if stage.has(stage.main) else stage.pages[0]
     temporary = target.with_name(target.name + ".tmp")
+    if not os.access(target.parent, os.W_OK | os.X_OK):
+        # libzim only says "unable to write"; say whose folder it is, and how to mend it.
+        raise BuildError(
+            f"The library folder ({target.parent}) cannot be written to by the user Zim Pro "
+            f"runs as (id {os.getuid()}). Give that user the folder, for example with "
+            f"`chown {os.getuid()}:{os.getgid()}` on it; with Docker, on the folder mounted "
+            "there. Docker creates a missing folder as root, which causes this."
+        )
     temporary.unlink(missing_ok=True)
     seen: dict[str, str] = {}  # content hash -> the path that already holds it
     written = aliased = 0

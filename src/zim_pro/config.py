@@ -38,6 +38,18 @@ DEFAULT_SETTINGS: dict[str, int | bool | str] = {
     # HTTP proxy, say), and a FlareSolverr address for sites that put up a browser check.
     "build_proxy": "",
     "captcha_solver_url": "",
+    # Each can be set up and still switched off, from Settings or from the menu.
+    "build_proxy_enabled": True,
+    "captcha_solver_enabled": True,
+    # The control server of a Gluetun VPN container: what the connection is (address,
+    # country) and the means to ask it for another address. An API key, or a name and
+    # password, whichever the container was given.
+    "vpn_control_url": "",
+    "vpn_control_key": "",
+    "vpn_control_user": "",
+    "vpn_control_password": "",
+    # Ask the VPN for another address when a site answers "too many requests".
+    "vpn_change_ip": False,
     # Feeds: ZIMs kept up to date from RSS. Their syncs have a queue of their own.
     "feed_auto_sync": True,
     "max_concurrent_feed_syncs": 1,

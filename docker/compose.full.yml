@@ -1,0 +1,71 @@
+# Zim Pro: everything
+#
+# The VPN, the captcha solver and browser capture together. See compose.vpn.yml and
+# compose.zimit.yml for what each part is, and what the Docker socket means.
+#
+# Then, in Settings -> Network:
+#   Proxy address           http://gluetun:8888
+#   Control server address  http://gluetun:8000
+#   Control server API key  the VPN_CONTROL_KEY from .env
+#   Solver address          http://gluetun:8191
+#
+# Values come from .env beside this file (see .env.example). Start with:
+#   docker compose -f compose.full.yml up -d
+
+services:
+  zim-pro:
+    image: ghcr.io/magicstack-llp/zim-pro:${ZIM_PRO_TAG:-latest}
+    container_name: zim-pro
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "${PORT:-8083}:8080"
+    extra_hosts:
+      # Lets Ask AI reach a model server on this machine (Ollama, LM Studio, llama.cpp)
+      # at http://host.docker.internal:<port>/v1
+      - "host.docker.internal:host-gateway"
+    environment:
+      KIWIX_ADMIN_TOKEN: ${ADMIN_TOKEN:-}   # empty: no token asked for
+    volumes:
+      - ${ZIM_DIR:-./zims}:/data            # your folder of .zim files
+      - ${STATE_DIR:-./state}:/state        # the database, uploads and pictures
+      # Browser capture (Zimit). This gives the container control of Docker on this machine.
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:-999}"                # the docker group's gid: getent group docker
+    depends_on:
+      - gluetun
+
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      # Your provider's details: https://github.com/qdm12/gluetun-wiki
+      VPN_SERVICE_PROVIDER: ${VPN_SERVICE_PROVIDER:?set VPN_SERVICE_PROVIDER in .env}
+      VPN_TYPE: ${VPN_TYPE:-wireguard}
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:?set WIREGUARD_PRIVATE_KEY in .env}
+      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES:?set WIREGUARD_ADDRESSES in .env}
+      # A country, not one server, so that "Change IP" has other addresses to pick from.
+      SERVER_COUNTRIES: ${SERVER_COUNTRIES:-Netherlands}
+      HTTPPROXY: "on"                       # the proxy Zim Pro uses, on port 8888
+      # The control server, on port 8000, and the key Zim Pro must send to it.
+      HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE: '{"auth":"apikey","apikey":"${VPN_CONTROL_KEY:?set VPN_CONTROL_KEY in .env}"}'
+      TZ: ${TZ:-Etc/UTC}
+
+  # Inside the VPN's network, so it leaves from the same address as Zim Pro's requests:
+  # a clearance is tied to the address that earned it.
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+    environment:
+      LOG_LEVEL: info
+      TZ: ${TZ:-Etc/UTC}

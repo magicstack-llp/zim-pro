@@ -1,6 +1,8 @@
-import { useEffect, type ReactNode } from "react";
+import { useEffect, useRef, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useScrollLock } from "./lib/viewport";
+
+const open: object[] = [];
 
 /**
  * A modal for a focused task such as filling in a form.
@@ -24,11 +26,19 @@ export function Dialog({
   children: ReactNode;
 }) {
   useScrollLock(true);
+  // Escape closes only the dialog on top, when one was opened from another.
+  const close = useRef(onClose);
+  close.current = onClose;
   useEffect(() => {
-    const onKey = (event: KeyboardEvent) => event.key === "Escape" && onClose();
+    const mine = {};
+    open.push(mine);
+    const onKey = (event: KeyboardEvent) => event.key === "Escape" && open[open.length - 1] === mine && close.current();
     document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      open.splice(open.indexOf(mine), 1);
+    };
+  }, []);
 
   return createPortal(
     <div className="fixed inset-x-0 z-[60] flex items-end justify-center sm:items-center sm:p-6" style={{ top: "var(--vv-top, 0px)", height: "var(--vvh, 100dvh)" }}>

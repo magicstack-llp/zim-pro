@@ -15,6 +15,7 @@ import asyncio
 import email.utils
 import hashlib
 import json
+import logging
 import mimetypes
 import re
 import time
@@ -22,15 +23,18 @@ import urllib.robotparser
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlsplit
 
 import httpx
 
 from ..downloads.engine import USER_AGENT
 from ..feeds import parse as feed_parse
-from . import extract, sitemap
+from . import extract, icons, sitemap
 from .report import Cancelled, Reporter
 from .writer import BuildError, Stage, ZimMeta, language_code, slugify
+
+log = logging.getLogger(__name__)
 
 MB = 1024 * 1024
 PAGE_LIMIT_BYTES = 15 * MB
@@ -76,6 +80,9 @@ class CrawlOptions:
     rate: float = 0  # requests per second to one host; 0 leaves it to the site and to us
     proxy: str = ""  # every request goes through it, such as a VPN container's HTTP proxy
     solver: str = ""  # a FlareSolverr address, asked when a site puts up a browser check
+    # The VPN behind the proxy (a ``network.Network``): waited for while it reconnects,
+    # and asked for another address when a site keeps answering "too many requests".
+    network: Any = None
     title: str = ""
     language: str = ""
 
@@ -159,7 +166,12 @@ class Fetcher:
         pace: float = 0,
         proxy: str = "",
         solver: str = "",
+        network: Any = None,
+        on_new_address: Callable[[str], None] | None = None,
     ):
+        self._network = network if proxy else None
+        self._on_new_address = on_new_address
+        self.address_changes = 0
         self.pace = pace  # seconds between requests to a host, when the user set a rate
         self.solver = solver.rstrip("/")
         # Use what is in the cache without asking again: for content that never changes.
@@ -244,6 +256,32 @@ class Fetcher:
         if self._on_slow:
             self._on_slow(host, wait, status)
 
+    async def _new_address(self, host: str, since: int) -> bool:
+        """Have the VPN change its address after ``host`` refused; True if it now differs."""
+        network = self._network
+        if network is None or not network.changes_ip_when_refused:
+            return False
+        try:
+            if not await network.change_ip(since):
+                return False
+        except Exception as exc:  # the VPN's trouble must not end the build
+            log.warning("could not change the VPN address: %s", exc)
+            return False
+        # A new address starts with a clean record: no pause owed, the ordinary pace, and
+        # none of the clearances the old address had earned.
+        self._blocked.pop(host, None)
+        self._strikes[host] = 0
+        self._calm.pop(host, None)
+        self._delay.pop(host, None)
+        if host in self._base:
+            self._delay[host] = self._base[host]
+        self._agents.clear()
+        self.client.cookies.clear()
+        self.address_changes += 1
+        if self._on_new_address:
+            self._on_new_address(host)
+        return True
+
     def _went_well(self, host: str) -> None:
         if host not in self._delay or host not in self._calm:
             return
@@ -326,6 +364,9 @@ class Fetcher:
                 if self._gate:
                     await self._gate()
                 await self._wait_turn(host)
+                if self._network is not None:
+                    await self._network.steady()
+                sent_under = self._network.generation if self._network is not None else 0
                 if host in self._agents:
                     headers["User-Agent"] = self._agents[host]
                 try:
@@ -400,6 +441,9 @@ class Fetcher:
                         raise FetchError(
                             f"HTTP {slow.status}: the site kept refusing, even after waiting"
                         ) from None
+                    if await self._new_address(host, sent_under):
+                        solved = None
+                        continue
                     self._slow_down(host, slow.status, slow.wait)
                     continue
                 except FetchError:
@@ -450,6 +494,8 @@ class Crawler:
             pace=1 / options.rate if options.rate > 0 else 0,
             proxy=options.proxy,
             solver=options.solver,
+            network=options.network,
+            on_new_address=self._new_address,
         )
         self.seed = extract.normalise(options.url)
         if not self.seed:
@@ -463,7 +509,7 @@ class Crawler:
         self.page_urls: dict[str, str] = {}  # ZIM path -> the address it was saved from
         self.resources: dict[str, str] = {}  # address -> kind, still to fetch
         self.first: extract.Prepared | None = None
-        self.icon_url = ""
+        self.icon_urls: list[str] = []  # where to look for the ZIM's picture, in order
         # The one queue of pages to fetch, and every address that has ever been offered to it.
         self.queue: asyncio.Queue[tuple[str, int]] = asyncio.Queue()
         self.seen: set[str] = set()
@@ -507,6 +553,12 @@ class Crawler:
         """What makes two addresses the same page: http or https, with or without www."""
         parts = urlsplit(url)
         return f"{parts.netloc.removeprefix('www.')}{parts.path}?{parts.query}"
+
+    def _new_address(self, host: str) -> None:
+        self.report.note(
+            f"{host} answered too many requests: the VPN was given another address and "
+            "the page was asked for again."
+        )
 
     def _slowed(self, host: str, wait: float, status: int) -> None:
         if host not in self._slow_hosts:
@@ -890,7 +942,11 @@ class Crawler:
         if self.first is None or url == self.seed:
             self.first = prepared
             self.stage.main = path
-            self.icon_url = prepared.icon or extract.normalise("/favicon.ico", final)
+            self.icon_urls = [
+                *prepared.icons,
+                extract.normalise("/favicon.ico", final),
+                prepared.share_picture,
+            ]
         for address, kind in prepared.resources:
             self.resources.setdefault(address, kind)
         return prepared.links
@@ -952,12 +1008,20 @@ class Crawler:
             self.stage.add_resource(
                 path, "text/css", extract.localise_css(css, final, path, self.saved).encode()
             )
-        if self.icon_url:
+        await self._icon()
+
+    async def _icon(self) -> None:
+        """Take the first of the site's pictures that can be had and drawn."""
+        for address in [a for a in self.icon_urls if a][:6]:
             try:
-                icon = await self.fetcher.get(self.icon_url, 2 * MB)
-                self.stage.icon = icon.file.read_bytes()
+                icon = await self.fetcher.get(address, 2 * MB)
             except FetchError:
-                pass  # no icon: the library draws a lettered tile
+                continue
+            data = icon.file.read_bytes()
+            if icons.readable(data):
+                self.stage.icon = data
+                return
+        # None: the ZIM gets a tile with the first letter of its title.
 
     async def _localise(self) -> None:
         """Point every page at what was saved, on worker threads."""

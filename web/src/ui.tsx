@@ -26,6 +26,23 @@ export function BookIcon({ src, title, size = 40 }: { src?: string | null; title
   );
 }
 
+export function Switch({ checked, onChange, label, small = false, disabled = false }: { checked: boolean; onChange: (value: boolean) => void; label: string; small?: boolean; disabled?: boolean }) {
+  const [track, knob, travel] = small ? ["h-[18px] w-8", "h-3.5 w-3.5", "translate-x-3.5"] : ["h-6 w-11", "h-5 w-5", "translate-x-5"];
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      disabled={disabled}
+      onClick={() => onChange(!checked)}
+      className={`relative ${track} shrink-0 rounded-full transition disabled:opacity-50 ${checked ? "bg-brand-600" : "bg-zinc-300 dark:bg-zinc-700"}`}
+    >
+      <span className={`absolute top-0.5 left-0.5 ${knob} rounded-full bg-white shadow transition-transform ${checked ? travel : ""}`} />
+    </button>
+  );
+}
+
 export function Progress({ value, tone = "brand" }: { value: number; tone?: "brand" | "muted" | "red" }) {
   const color = { brand: "bg-brand-500", muted: "bg-zinc-400", red: "bg-red-500" }[tone];
   return (

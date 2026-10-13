@@ -48,6 +48,7 @@ class FeedSync:
         rate: float = 0,
         proxy: str = "",
         solver: str = "",
+        network: Any = None,
         rebuild: bool = False,
         transport: httpx.AsyncBaseTransport | None = None,
     ):
@@ -70,6 +71,7 @@ class FeedSync:
             rate=rate,
             proxy=proxy,
             solver=solver,
+            network=network,
         )
         self.crawler = Crawler(options, stage, store / "cache", report, workers, transport)
         self.fetcher = self.crawler.fetcher
@@ -100,6 +102,7 @@ class FeedSync:
             "dropped": self.dropped,
             "slowed": self.fetcher.slowed,
             "solved": self.fetcher.solved,
+            "address_changes": self.fetcher.address_changes,
         }
         if not total:
             why = next((e["why"] for e in report.log if e["kind"] == "failed"), "")
@@ -350,14 +353,17 @@ class FeedSync:
         stage.add_page("index", title, self._index_page(title, listed), title)
         stage.main = "index"
         site = next((s["site"] for s in self.sources if s["site"]), self.sources[0]["url"])
-        crawler.icon_url = extract.normalise("/favicon.ico", site)
+        crawler.icon_urls = [
+            extract.normalise("/apple-touch-icon.png", site),
+            extract.normalise("/favicon.ico", site),
+        ]
         wanted = set(crawler.resources)
         await crawler._resources()
         missing_file.write_text(json.dumps(sorted(missing | (wanted - set(crawler.saved)))))
         report.phase("converting", len(stage.pages))
         await crawler._localise()
         if self.dropped:
-            self._prune_cache(in_use | {crawler.icon_url})
+            self._prune_cache(in_use | set(crawler.icon_urls))
         names = [s["title"] or s["url"] for s in self.sources]
         return ZimMeta(
             name=f"custom_feed-{slugify(title)}",

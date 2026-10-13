@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 import { Dialog } from "../Dialog";
+import { bookIconOf, CategorySelect, IconPicker, NO_ICON_CHANGE, ownIcon, saveIcon, sourceIcon } from "../Filing";
 import { api, authHeaders, post, readUrl, type Build } from "../lib/api";
-import { ago, bytes, count } from "../lib/format";
+import { ago, bytes, categoryLabel, count } from "../lib/format";
 import { useData, useLive } from "../lib/live";
-import { Empty, ErrorNote, PageHeader, Progress, Tabs } from "../ui";
+import { BookIcon, Empty, ErrorNote, PageHeader, Progress, Switch, Tabs } from "../ui";
 import { Segmented } from "./AiSettings";
 
 interface LatestBuild {
@@ -36,6 +37,9 @@ interface LinkRow {
   language: string;
   notes: string;
   rebuild_days: number;
+  category: string;
+  /** When a picture of the user's own was chosen for it; null if none was. */
+  icon: number | null;
   book_id: string;
   last_built: number | null;
   book_title: string | null;
@@ -50,13 +54,15 @@ interface UploadRow {
   size: number;
   title: string;
   images: boolean;
+  category: string;
+  icon: number | null;
   book_id: string;
   last_built: number | null;
   book_title: string | null;
   book_size: number | null;
   build: LatestBuild | null;
 }
-type LinkDraft = Omit<LinkRow, "id" | "book_id" | "last_built" | "last_feed_check" | "book_title" | "book_size" | "book_pages" | "build"> & { id?: number };
+type LinkDraft = Omit<LinkRow, "id" | "book_id" | "last_built" | "last_feed_check" | "book_title" | "book_size" | "book_pages" | "build" | "icon"> & { id?: number; icon?: number | null; book_id?: string; book_title?: string | null };
 interface CsvRow {
   row: number;
   url: string;
@@ -65,7 +71,7 @@ interface CsvRow {
   why: string;
 }
 
-const NEW_LINK: LinkDraft = { url: "", title: "", engine: "builtin", scope: "page", max_pages: 500, max_depth: 5, mode: "clean", images: true, video: false, subdomains: false, sitemaps: "", robots_url: "", rate_limit: 0, rate_unit: "second", feeds: "", feed_minutes: 60, language: "", notes: "", rebuild_days: 0 };
+const NEW_LINK: LinkDraft = { url: "", title: "", engine: "builtin", scope: "page", max_pages: 500, max_depth: 5, mode: "clean", images: true, video: false, subdomains: false, sitemaps: "", robots_url: "", rate_limit: 0, rate_unit: "second", feeds: "", feed_minutes: 60, language: "", notes: "", rebuild_days: 0, category: "" };
 const SCOPE_LABEL = { page: "This page only", path: "Pages under this address", site: "The whole site" };
 export const PHASES: Record<string, string> = {
   "checking feeds": "Checking the feeds",
@@ -93,20 +99,7 @@ export function PauseButton({ job, act, path = "/api/build/jobs" }: { job: Build
   );
 }
 
-export function Switch({ checked, onChange, label }: { checked: boolean; onChange: (value: boolean) => void; label: string }) {
-  return (
-    <button
-      type="button"
-      role="switch"
-      aria-checked={checked}
-      aria-label={label}
-      onClick={() => onChange(!checked)}
-      className={`relative h-6 w-11 shrink-0 rounded-full transition ${checked ? "bg-brand-600" : "bg-zinc-300 dark:bg-zinc-700"}`}
-    >
-      <span className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow transition-transform ${checked ? "translate-x-5" : ""}`} />
-    </button>
-  );
-}
+export { Switch };
 
 export function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
@@ -199,12 +192,14 @@ function LinkDialog({ initial, zimitUnavailable, onClose, onSaved }: { initial: 
   const [problem, setProblem] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const set = <K extends keyof LinkDraft>(key: K, value: LinkDraft[K]) => setDraft({ ...draft, [key]: value });
+  const [icon, setIcon] = useState(NO_ICON_CHANGE);
   const zimit = draft.engine === "zimit";
   const save = () => {
     setSaving(true);
     setProblem(null);
-    const { id, ...body } = draft;
-    api(id ? `/api/build/links/${id}` : "/api/build/links", { method: id ? "PUT" : "POST", body: JSON.stringify(body) })
+    const { id, icon: _icon, book_id: _book, book_title: _title, ...body } = draft;
+    api<{ id: number }>(id ? `/api/build/links/${id}` : "/api/build/links", { method: id ? "PUT" : "POST", body: JSON.stringify(body) })
+      .then((saved) => saveIcon("link", saved.id, icon))
       .then(onSaved)
       .catch((reason) => setProblem(String(reason.message)))
       .finally(() => setSaving(false));
@@ -234,6 +229,21 @@ function LinkDialog({ initial, zimitUnavailable, onClose, onSaved }: { initial: 
         <input className="input mt-1" value={draft.title} onChange={(e) => set("title", e.target.value)} />
       </label>
       <div className="mt-2 divide-y divide-zinc-100 dark:divide-zinc-800">
+        <Row label="Category" hint="Where the ZIM is filed in the Library, in Search and in Ask AI.">
+          <CategorySelect value={draft.category} onChange={(value) => set("category", value)} />
+        </Row>
+        {!zimit && (
+          <Row label="Picture" hint="">
+            <IconPicker
+              own={ownIcon("link", draft)}
+              fallback={bookIconOf(draft)}
+              title={draft.title || draft.url.replace(/^https?:\/\/(www\.)?/, "")}
+              choice={icon}
+              onChange={setIcon}
+              hint={draft.book_id ? "Yours replaces the site's own icon the next time the ZIM is made." : "Empty: the site's own icon is used, or a tile with the title's first letter."}
+            />
+          </Row>
+        )}
         <Row label="What to save" hint={SCOPE_LABEL[draft.scope]}>
           <Segmented
             label="What to save"
@@ -467,12 +477,14 @@ function Links({ live, onProblem }: { live: Build[]; onProblem: (message: string
           return (
             <li key={link.id} className="card p-4">
               <div className="flex flex-wrap items-start gap-3">
+                <BookIcon key={sourceIcon("link", link) ?? "none"} src={sourceIcon("link", link)} title={link.title || link.book_title || new URL(link.url).hostname.replace(/^www\./, "")} size={40} />
                 <div className="min-w-0 flex-1 basis-64">
                   <div className="truncate font-medium">{link.title || link.book_title || link.url}</div>
                   <a className="muted block truncate text-xs hover:underline" href={link.url} target="_blank" rel="noreferrer">
                     {link.url}
                   </a>
                   <div className="mt-1.5 flex flex-wrap gap-1.5">
+                    {link.category && <span className="badge bg-brand-50 text-brand-700 dark:bg-brand-900/50 dark:text-brand-100">{categoryLabel(link.category)}</span>}
                     <span className="badge">{SCOPE_LABEL[link.scope]}</span>
                     {link.scope === "site" && link.subdomains && <span className="badge">With subdomains</span>}
                     {link.engine === "zimit" ? (
@@ -648,12 +660,18 @@ function Uploads({ live, onProblem }: { live: Build[]; onProblem: (message: stri
           return (
             <li key={upload.id} className="card p-4">
               <div className="flex flex-wrap items-start gap-3">
+                <BookIcon key={sourceIcon("upload", upload) ?? "none"} src={sourceIcon("upload", upload)} title={upload.book_title || upload.title || upload.filename} size={40} />
                 <div className="min-w-0 flex-1 basis-64">
                   <div className="truncate font-medium">{upload.book_title || upload.title || upload.filename}</div>
                   <div className="muted truncate text-xs">
                     {upload.filename} · {KIND_LABEL[upload.kind]} · {bytes(upload.size)}
                     {upload.kind !== "zim" && !upload.images ? " · without pictures" : ""}
                   </div>
+                  {upload.category && (
+                    <div className="mt-1.5">
+                      <span className="badge bg-brand-50 text-brand-700 dark:bg-brand-900/50 dark:text-brand-100">{categoryLabel(upload.category)}</span>
+                    </div>
+                  )}
                   {built && (
                     <p className="muted mt-2 text-xs">
                       <Link className="text-brand-700 dark:text-brand-400 font-medium hover:underline" to={readUrl(upload.book_id)}>
@@ -673,11 +691,9 @@ function Uploads({ live, onProblem }: { live: Build[]; onProblem: (message: stri
                       </button>
                     </>
                   ) : (
-                    upload.kind !== "zim" && (
-                      <button className="btn" onClick={() => setAgain(upload)}>
-                        Convert again
-                      </button>
-                    )
+                    <button className="btn" onClick={() => setAgain(upload)}>
+                      Options
+                    </button>
                   )}
                   <button
                     className="btn btn-danger"
@@ -709,26 +725,66 @@ function Uploads({ live, onProblem }: { live: Build[]; onProblem: (message: stri
 function ConvertDialog({ upload, onClose, onDone }: { upload: UploadRow; onClose: () => void; onDone: () => void }) {
   const [title, setTitle] = useState(upload.title);
   const [images, setImages] = useState(upload.images);
+  const [category, setCategory] = useState(upload.category);
+  const [icon, setIcon] = useState(NO_ICON_CHANGE);
   const [problem, setProblem] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+  const book = upload.kind !== "zim"; // a ready-made ZIM is taken as it is
+  // Filing is saved on its own; converting again is only for what changes the ZIM itself.
+  const save = (convert: boolean) => {
+    setSaving(true);
+    setProblem(null);
+    api(`/api/build/uploads/${upload.id}`, { method: "PUT", body: JSON.stringify({ category }) })
+      .then(() => (book ? saveIcon("upload", upload.id, icon) : undefined))
+      .then(() => (convert ? post(`/api/build/uploads/${upload.id}/build`, { title, images }) : undefined))
+      .then(onDone)
+      .catch((reason) => setProblem(String(reason.message)))
+      .finally(() => setSaving(false));
+  };
+  const changed = title !== upload.title || images !== upload.images || !!icon.file || icon.removed;
   return (
     <Dialog
-      title="Convert again"
+      title={upload.filename}
       onClose={onClose}
       footer={
-        <button className="btn btn-primary" onClick={() => post(`/api/build/uploads/${upload.id}/build`, { title, images }).then(onDone).catch((reason) => setProblem(String(reason.message)))}>
-          Convert
-        </button>
+        <div className="flex w-full flex-wrap justify-end gap-2">
+          <button className="btn" onClick={onClose}>
+            Cancel
+          </button>
+          {book && (
+            <button className="btn" onClick={() => save(true)} disabled={saving}>
+              Save and convert again
+            </button>
+          )}
+          <button className="btn btn-primary" onClick={() => save(false)} disabled={saving}>
+            Save
+          </button>
+        </div>
       }
     >
       <ErrorNote message={problem} />
-      <p className="muted text-sm">{upload.filename} is converted again and replaces the ZIM made from it before.</p>
-      <label className="mt-3 block text-sm font-medium">
-        Title <span className="muted font-normal">(optional; the book's own title is used if empty)</span>
-        <input className="input mt-1" value={title} onChange={(e) => setTitle(e.target.value)} />
-      </label>
-      <Row label="Include pictures" hint={upload.kind === "pdf" ? "Keeps a picture of every page beside its text. Off makes a much smaller ZIM, but scanned pages become unreadable." : "Off: the book's pictures are left out."}>
-        <Switch checked={images} onChange={setImages} label="Include pictures" />
-      </Row>
+      <div className="divide-y divide-zinc-100 dark:divide-zinc-800">
+        <Row label="Category" hint="Where the ZIM is filed in the Library, in Search and in Ask AI. Takes effect at once.">
+          <CategorySelect value={category} onChange={setCategory} />
+        </Row>
+        {book && (
+          <Row label="Picture" hint="">
+            <IconPicker own={ownIcon("upload", upload)} fallback={bookIconOf(upload)} title={upload.book_title || upload.title || upload.filename} choice={icon} onChange={setIcon} hint="Empty: the book's cover is used. Yours goes in when the book is converted again." />
+          </Row>
+        )}
+      </div>
+      {book && (
+        <>
+          <label className="mt-3 block text-sm font-medium">
+            Title <span className="muted font-normal">(optional; the book's own title is used if empty)</span>
+            <input className="input mt-1" value={title} onChange={(e) => setTitle(e.target.value)} />
+          </label>
+          <Row label="Include pictures" hint={upload.kind === "pdf" ? "Keeps a picture of every page beside its text. Off makes a much smaller ZIM, but scanned pages become unreadable." : "Off: the book's pictures are left out."}>
+            <Switch checked={images} onChange={setImages} label="Include pictures" />
+          </Row>
+          {changed && <p className="muted mt-2 text-xs">The title, the pictures and your own picture are part of the ZIM: choose “Save and convert again” to put them in.</p>}
+        </>
+      )}
     </Dialog>
   );
 }
@@ -829,7 +885,7 @@ function Jobs({ live, onProblem }: { live: Build[]; onProblem: (message: string 
                   {job.state === "finished" && !job.report.unchanged && (
                     <p className="mt-1.5 text-xs">
                       {count(job.report.pages ?? job.done)} {(job.report.pages ?? job.done) === 1 ? "page" : "pages"}
-                      {job.report.files ? ` · ${count(job.report.files)} files` : ""} · {bytes(job.size)}
+                      {job.report.files ? ` · ${count(job.report.files)} ${job.report.files === 1 ? "file" : "files"}` : ""} · {bytes(job.size)}
                       {job.report.searchable === false ? " · not searchable" : ""}
                       {job.failed > 0 && <span className="text-amber-700 dark:text-amber-400"> · {count(job.failed)} failed</span>}
                       {job.skipped > 0 ? ` · ${count(job.skipped)} skipped` : ""}
@@ -838,6 +894,7 @@ function Jobs({ live, onProblem }: { live: Build[]; onProblem: (message: string 
                       {job.report.from_sitemaps ? ` · ${count(job.report.from_sitemaps)} found through sitemaps` : ""}
                       {job.report.slowed ? " · slowed down at the site's request" : ""}
                       {job.report.solved ? ` · ${count(job.report.solved)} browser ${job.report.solved === 1 ? "check" : "checks"} solved` : ""}
+                      {job.report.address_changes ? ` · VPN address changed ${job.report.address_changes === 1 ? "once" : `${count(job.report.address_changes)} times`}` : ""}
                     </p>
                   )}
                   {job.state === "failed" && <p className="mt-1.5 text-xs text-red-600 dark:text-red-400">{job.error}</p>}

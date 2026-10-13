@@ -1,0 +1,31 @@
+# Zim Pro: with browser capture (Zimit)
+#
+# Adds the Docker socket, which the Create page needs to run Zimit for sites that only
+# work with JavaScript. The socket gives the container control of Docker on this machine,
+# which is as good as root: use it only on a machine you trust it with.
+# Set DOCKER_GID in .env to the output of: getent group docker | cut -d: -f3
+#
+# Values come from .env beside this file (see .env.example). Start with:
+#   docker compose -f compose.zimit.yml up -d
+
+services:
+  zim-pro:
+    image: ghcr.io/magicstack-llp/zim-pro:${ZIM_PRO_TAG:-latest}
+    container_name: zim-pro
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "${PORT:-8083}:8080"
+    extra_hosts:
+      # Lets Ask AI reach a model server on this machine (Ollama, LM Studio, llama.cpp)
+      # at http://host.docker.internal:<port>/v1
+      - "host.docker.internal:host-gateway"
+    environment:
+      KIWIX_ADMIN_TOKEN: ${ADMIN_TOKEN:-}   # empty: no token asked for
+    volumes:
+      - ${ZIM_DIR:-./zims}:/data            # your folder of .zim files
+      - ${STATE_DIR:-./state}:/state        # the database, uploads and pictures
+      # Browser capture (Zimit). This gives the container control of Docker on this machine.
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "${DOCKER_GID:-999}"                # the docker group's gid: getent group docker

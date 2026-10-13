@@ -75,6 +75,18 @@ def test_nothing_to_write_is_an_error_and_leaves_no_file(tmp_path):
     assert list(tmp_path.glob("*.zim*")) == []
 
 
+def test_a_library_folder_that_cannot_be_written_to_is_named(tmp_path):
+    stage = staged(tmp_path)
+    library = tmp_path / "library"
+    library.mkdir()
+    library.chmod(0o555)
+    try:
+        with pytest.raises(BuildError, match="cannot be written to by the user"):
+            write_zim(stage, ZimMeta("custom_test", "T"), library / "t.zim")
+    finally:
+        library.chmod(0o755)
+
+
 def test_verify_notices_a_page_that_went_missing(tmp_path):
     stage = staged(tmp_path)
     meta = ZimMeta("custom_test", "T")
@@ -748,3 +760,38 @@ def test_scanner_ignores_work_in_progress_folders(tmp_path):
     write_zim(stage, meta, data / meta.filename)
     scanner.scan()
     assert [b["path"] for b in db.all("SELECT path FROM books")] == [str(data / meta.filename)]
+
+
+async def test_a_new_zim_is_filed_under_its_category_and_carries_the_chosen_picture(tmp_path):
+    import io
+
+    from PIL import Image
+
+    from zim_pro.builder import icons
+
+    builds = manager(tmp_path)
+    source = tmp_path / "knots.epub"
+    make_epub(source)
+    builds.db.execute(
+        "INSERT INTO uploads (id, filename, kind, size, path, category) "
+        "VALUES (1, 'knots.epub', 'epub', 1, ?, 'Sailing')",
+        (str(source),),
+    )
+    out = io.BytesIO()
+    Image.new("RGB", (16, 16), (200, 30, 30)).save(out, "PNG")
+    picture = icons.path(tmp_path / "state", "upload", 1)
+    picture.parent.mkdir(parents=True)
+    picture.write_bytes(icons.normalise(out.getvalue()))
+    await builds.start()
+    try:
+        job = await finished(builds, builds.enqueue("upload", 1, "knots.epub")["id"])
+        book = builds.db.one("SELECT * FROM books WHERE id = ?", (job["book_id"],))
+        assert book["category"] == "Sailing"  # from its very first build
+        shown = Image.open(
+            io.BytesIO(bytes(Archive(book["path"]).get_illustration_item(48).content))
+        )
+        # The chosen picture, drawn to fill the tile though it was only 16 pixels wide.
+        assert shown.size == (48, 48)
+        assert shown.convert("RGB").getpixel((2, 2)) == (200, 30, 30)
+    finally:
+        await builds.stop()

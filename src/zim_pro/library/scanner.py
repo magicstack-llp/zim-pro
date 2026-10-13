@@ -77,6 +77,25 @@ _COLUMNS = (
 )  # fmt: skip
 
 
+def file_under_categories(db: Database) -> None:
+    """Set every book's category: the one chosen where it was made, or what it says itself."""
+    chosen: dict[str, str] = {}
+    for sql in (
+        "SELECT book_id, category FROM links WHERE book_id != ''",
+        "SELECT book_id, category FROM feeds WHERE book_id != ''",
+        # A ZIM that was uploaded ready-made keeps what it says of itself.
+        "SELECT book_id, category FROM uploads WHERE book_id != '' "
+        "AND (kind != 'zim' OR category != '')",
+    ):
+        for row in db.all(sql):
+            # Made here and not filed anywhere: "My ZIMs", whatever tags a capture gave it.
+            chosen[row["book_id"]] = row["category"] or "custom"
+    for row in db.all("SELECT id, tags, category FROM books"):
+        category = chosen.get(row["id"]) or category_of(row["id"], row["tags"])
+        if category != row["category"]:
+            db.execute("UPDATE books SET category = ? WHERE id = ?", (category, row["id"]))
+
+
 class Scanner:
     """Keeps the ``books`` table in step with the ZIM files on disk."""
 
@@ -148,10 +167,7 @@ class Scanner:
                 )
 
         # Derived from the id and tags, so recompute for every book rather than only new files.
-        for row in self.db.all("SELECT id, tags, category FROM books"):
-            category = category_of(row["id"], row["tags"])
-            if category != row["category"]:
-                self.db.execute("UPDATE books SET category = ? WHERE id = ?", (category, row["id"]))
+        file_under_categories(self.db)
 
         removed = 0
         for row in known.values():

@@ -21,8 +21,8 @@ from ..db import Database
 from ..events import EventBus
 from ..library.archive_pool import ArchivePool
 from ..library.naming import split_filename
-from ..library.scanner import Scanner
-from . import zimit
+from ..library.scanner import Scanner, file_under_categories
+from . import icons, zimit
 from .convert import epub, mobi, pdf
 from .crawler import Crawler, CrawlOptions, NothingNew
 from .report import Cancelled, Reporter
@@ -89,6 +89,8 @@ class BuildManager:
         self._tasks: list[asyncio.Task[None]] = []
         self._stopping = False
         self.transport = None  # tests put a fake web here
+        self.state_dir = state_dir
+        self.network = None  # the VPN and solver in use; set once the app is put together
 
     async def start(self) -> None:
         # Builds cut short by a restart start again from the queue. One that was paused
@@ -334,6 +336,9 @@ class BuildManager:
                 "ORDER BY id DESC LIMIT ?)",
                 (self.KEEP_FINISHED,),
             )
+        if state == "finished":
+            # Only now does the source know which book is its own.
+            file_under_categories(self.db)
         self._changed()
         self.events.publish("library", {"changed": True})
 
@@ -344,6 +349,23 @@ class BuildManager:
         if row["kind"] == "link":
             return await self._build_link(row, stage, reporter)
         return await self._build_upload(row, stage, reporter)
+
+    def _route(self) -> dict[str, Any]:
+        """How fetching leaves this machine: the proxy, the solver and the VPN behind them."""
+        if self.network is None:
+            return {
+                "proxy": str(self.db.get_setting("build_proxy")),
+                "solver": str(self.db.get_setting("captcha_solver_url")),
+            }
+        return {
+            "proxy": self.network.proxy,
+            "solver": self.network.solver,
+            "network": self.network,
+        }
+
+    def _own_icon(self, stage: Stage, kind: str, source_id: int) -> None:
+        """Use the picture the user chose, when there is one, over the one that was found."""
+        stage.icon = icons.load(self.state_dir, kind, source_id) or stage.icon
 
     def _workers(self) -> int:
         return max(1, min(16, int(self.db.get_setting("build_workers"))))
@@ -393,8 +415,7 @@ class BuildManager:
                 robots_url=link["robots_url"],
                 feed_urls=tuple(link["feeds"].split()),
                 rate=per_second(link["rate_limit"], link["rate_unit"]),
-                proxy=str(self.db.get_setting("build_proxy")),
-                solver=str(self.db.get_setting("captcha_solver_url")),
+                **self._route(),
                 title=link["title"],
                 language=link["language"],
             )
@@ -418,6 +439,7 @@ class BuildManager:
             except NothingNew:
                 return link["book_id"], {"unchanged": True, "from_feeds": 0, "rss": True}
             meta.name = self._name_for("links", link, meta.name)
+            self._own_icon(stage, "link", link["id"])
             report = await self._write(stage, meta, reporter, history=not from_feeds)
             report.update(
                 rss=from_feeds,
@@ -427,6 +449,7 @@ class BuildManager:
                 from_sitemaps=crawler.from_sitemaps,
                 slowed=crawler.fetcher.slowed,
                 solved=crawler.fetcher.solved,
+                address_changes=crawler.fetcher.address_changes,
             )
             name = meta.name
             if from_feeds:
@@ -467,6 +490,7 @@ class BuildManager:
                 upload["title"],
             )
             meta.name = self._name_for("uploads", upload, meta.name)
+            self._own_icon(stage, "upload", upload["id"])
             report = await self._write(stage, meta, reporter)
             name = meta.name
         self.db.execute(

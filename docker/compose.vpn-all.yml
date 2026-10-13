@@ -1,0 +1,67 @@
+# Zim Pro: everything through the VPN
+#
+# Zim Pro runs inside Gluetun's network, so all of its traffic leaves through the VPN:
+# the catalog, ZIM downloads and Ask AI as well as links and feeds. The price: the web
+# interface is unreachable whenever the VPN container is down, and Ask AI cannot reach a
+# model server on this machine by the name host.docker.internal.
+# In Settings, leave Proxy address empty: there is nothing to go around.
+#
+# Then, in Settings -> Network:
+#   Proxy address           (empty)
+#   Control server address  http://localhost:8000
+#   Control server API key  the VPN_CONTROL_KEY from .env
+#   Solver address          http://localhost:8191
+#
+# Values come from .env beside this file (see .env.example). Start with:
+#   docker compose -f compose.vpn-all.yml up -d
+
+services:
+  zim-pro:
+    image: ghcr.io/magicstack-llp/zim-pro:${ZIM_PRO_TAG:-latest}
+    container_name: zim-pro
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    environment:
+      KIWIX_ADMIN_TOKEN: ${ADMIN_TOKEN:-}   # empty: no token asked for
+    volumes:
+      - ${ZIM_DIR:-./zims}:/data            # your folder of .zim files
+      - ${STATE_DIR:-./state}:/state        # the database, uploads and pictures
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+
+  gluetun:
+    image: qmcgaw/gluetun:latest
+    container_name: gluetun
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    ports:
+      - "${PORT:-8083}:8080"                # Zim Pro's web interface, which lives in here
+    environment:
+      # Your provider's details: https://github.com/qdm12/gluetun-wiki
+      VPN_SERVICE_PROVIDER: ${VPN_SERVICE_PROVIDER:?set VPN_SERVICE_PROVIDER in .env}
+      VPN_TYPE: ${VPN_TYPE:-wireguard}
+      WIREGUARD_PRIVATE_KEY: ${WIREGUARD_PRIVATE_KEY:?set WIREGUARD_PRIVATE_KEY in .env}
+      WIREGUARD_ADDRESSES: ${WIREGUARD_ADDRESSES:?set WIREGUARD_ADDRESSES in .env}
+      # A country, not one server, so that "Change IP" has other addresses to pick from.
+      SERVER_COUNTRIES: ${SERVER_COUNTRIES:-Netherlands}
+      HTTPPROXY: "on"                       # the proxy Zim Pro uses, on port 8888
+      # The control server, on port 8000, and the key Zim Pro must send to it.
+      HTTP_CONTROL_SERVER_AUTH_DEFAULT_ROLE: '{"auth":"apikey","apikey":"${VPN_CONTROL_KEY:?set VPN_CONTROL_KEY in .env}"}'
+      TZ: ${TZ:-Etc/UTC}
+
+  # Inside the VPN's network, so it leaves from the same address as Zim Pro's requests:
+  # a clearance is tied to the address that earned it.
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    network_mode: "service:gluetun"
+    depends_on:
+      - gluetun
+    environment:
+      LOG_LEVEL: info
+      TZ: ${TZ:-Etc/UTC}

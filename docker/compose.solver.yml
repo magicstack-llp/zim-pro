@@ -1,0 +1,36 @@
+# Zim Pro: with a captcha solver
+#
+# Adds FlareSolverr, which gets past "checking your browser" pages (Cloudflare,
+# DDoS-Guard) when making ZIMs from links and feeds. No VPN.
+#
+# Then, in Settings -> Network:
+#   Solver address          http://flaresolverr:8191
+#
+# Values come from .env beside this file (see .env.example). Start with:
+#   docker compose -f compose.solver.yml up -d
+
+services:
+  zim-pro:
+    image: ghcr.io/magicstack-llp/zim-pro:${ZIM_PRO_TAG:-latest}
+    container_name: zim-pro
+    restart: unless-stopped
+    user: "${PUID:-1000}:${PGID:-1000}"
+    ports:
+      - "${PORT:-8083}:8080"
+    extra_hosts:
+      # Lets Ask AI reach a model server on this machine (Ollama, LM Studio, llama.cpp)
+      # at http://host.docker.internal:<port>/v1
+      - "host.docker.internal:host-gateway"
+    environment:
+      KIWIX_ADMIN_TOKEN: ${ADMIN_TOKEN:-}   # empty: no token asked for
+    volumes:
+      - ${ZIM_DIR:-./zims}:/data            # your folder of .zim files
+      - ${STATE_DIR:-./state}:/state        # the database, uploads and pictures
+
+  flaresolverr:
+    image: ghcr.io/flaresolverr/flaresolverr:latest
+    container_name: flaresolverr
+    restart: unless-stopped
+    environment:
+      LOG_LEVEL: info
+      TZ: ${TZ:-Etc/UTC}

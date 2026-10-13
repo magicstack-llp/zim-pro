@@ -9,10 +9,12 @@ interface Live {
   feeds: Build[];
   /** Bumps whenever the library or catalog changes on the server. */
   revision: number;
+  /** Bumps whenever the VPN or the captcha solver changes: switched, or a new address. */
+  network: number;
   refresh: () => void;
 }
 
-const LiveContext = createContext<Live>({ downloads: [], builds: [], feeds: [], revision: 0, refresh: () => {} });
+const LiveContext = createContext<Live>({ downloads: [], builds: [], feeds: [], revision: 0, network: 0, refresh: () => {} });
 
 /** Keeps download progress and change notifications current over server-sent events. */
 export function LiveProvider({ children }: { children: ReactNode }) {
@@ -20,6 +22,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const [builds, setBuilds] = useState<Build[]>([]);
   const [feeds, setFeeds] = useState<Build[]>([]);
   const [revision, setRevision] = useState(0);
+  const [network, setNetwork] = useState(0);
   const refresh = useCallback(() => {
     api<Download[]>("/api/downloads").then(setDownloads).catch(() => {});
     api<Build[]>("/api/build/jobs").then(setBuilds).catch(() => {});
@@ -38,10 +41,11 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     const bump = () => setRevision((value) => value + 1);
     source.addEventListener("library", bump);
     source.addEventListener("catalog", bump);
+    source.addEventListener("network", () => setNetwork((value) => value + 1));
     return () => source.close();
   }, []);
 
-  return <LiveContext.Provider value={{ downloads, builds, feeds, revision, refresh }}>{children}</LiveContext.Provider>;
+  return <LiveContext.Provider value={{ downloads, builds, feeds, revision, network, refresh }}>{children}</LiveContext.Provider>;
 }
 
 export const useLive = () => useContext(LiveContext);

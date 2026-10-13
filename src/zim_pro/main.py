@@ -1,4 +1,5 @@
 import asyncio
+import hmac
 import logging
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -7,9 +8,11 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import mcp_server, providers, scheduler
-from .api import ai, build, catalog, content, downloads, library
+from . import access, mcp_server, providers, scheduler
+from .api import access as access_api
+from .api import ai, build, catalog, content, downloads, library, organise
 from .api import feeds as feeds_api
+from .api import network as network_api
 from .builder.jobs import BuildManager
 from .config import Config
 from .context import Context
@@ -19,6 +22,7 @@ from .events import EventBus
 from .feeds.manager import FeedManager
 from .library.archive_pool import ArchivePool
 from .library.scanner import Scanner
+from .network import Network
 
 log = logging.getLogger(__name__)
 
@@ -33,7 +37,9 @@ def build_context(config: Config) -> Context:
     manager = DownloadManager(db, events, scanner, pool, config.data_dir)
     builds = BuildManager(db, events, scanner, pool, config.data_dir, config.state_dir)
     feeds = FeedManager(db, events, scanner, pool, config.data_dir, config.state_dir)
-    return Context(config, db, pool, scanner, events, manager, builds, feeds)
+    network = Network(db, events)
+    builds.network = feeds.network = network
+    return Context(config, db, pool, scanner, events, manager, builds, feeds, network)
 
 
 def find_web_dir(config: Config) -> Path | None:
@@ -71,13 +77,33 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     @app.middleware("http")
     async def mcp_auth(request: Request, call_next):
-        if config.admin_token and request.url.path.startswith("/mcp"):
+        # /mcp is open until it is given a lock: the admin token, or a key made in Settings.
+        if request.url.path.startswith("/mcp"):
+            locked = bool(config.admin_token) or access.has_keys(ctx.db)
             supplied = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-            if supplied != config.admin_token:
-                return JSONResponse({"detail": "admin token required"}, 401)
+            is_admin = bool(config.admin_token) and hmac.compare_digest(
+                supplied.encode(), config.admin_token.encode()
+            )
+            if locked and not is_admin and not access.check_key(ctx.db, supplied):
+                return JSONResponse(
+                    {"detail": "An MCP key is required: Authorization: Bearer <key>"},
+                    401,
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
         return await call_next(request)
 
-    for module in (content, library, catalog, downloads, ai, build, feeds_api):
+    for module in (
+        content,
+        library,
+        catalog,
+        downloads,
+        ai,
+        build,
+        feeds_api,
+        network_api,
+        organise,
+        access_api,
+    ):
         app.include_router(module.router)
     app.router.routes.extend(mcp_app.routes)
 

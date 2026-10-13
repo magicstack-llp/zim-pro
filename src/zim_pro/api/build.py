@@ -11,9 +11,11 @@ from fastapi import APIRouter, Depends, HTTPException, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field
 
-from ..builder import extract, zimit
+from ..builder import extract, icons, zimit
 from ..builder.writer import BuildError
 from ..context import Context, get_context, require_admin
+from ..library.scanner import file_under_categories
+from .organise import clean_category, use_category
 
 router = APIRouter(prefix="/api/build", dependencies=[Depends(require_admin)])
 
@@ -36,7 +38,7 @@ _NO = {"0", "no", "n", "false", "off", "exclude", ""}
 CSV_FIELDS = (
     "url", "title", "engine", "scope", "subdomains", "mode", "images", "video", "max_pages",
     "sitemaps", "robots_url", "rate_limit", "rate_unit", "feeds", "feed_minutes", "language",
-    "notes",
+    "category", "notes",
 )  # fmt: skip
 
 
@@ -66,6 +68,8 @@ class LinkBody(BaseModel):
     language: str = Field(default="", max_length=10)
     notes: str = Field(default="", max_length=1000)
     rebuild_days: int = Field(default=0, ge=0, le=365)
+    # What the ZIM is filed under in the library; empty: "My ZIMs".
+    category: str = Field(default="", max_length=80)
 
 
 def clean_addresses(text: str, what: str) -> list[str]:
@@ -115,6 +119,12 @@ def _clean_link(body: LinkBody) -> dict[str, Any]:
     return data
 
 
+def _refile(ctx: Context) -> None:
+    """A source's category changed: the book made from it moves with it."""
+    file_under_categories(ctx.db)
+    ctx.events.publish("library", {"changed": True})
+
+
 def _links(ctx: Context) -> list[dict[str, Any]]:
     """Every link with the book built from it and the state of its latest build."""
     rows = ctx.db.all(
@@ -146,10 +156,11 @@ def add_link(body: LinkBody, ctx: Context = Depends(get_context)) -> dict[str, A
     data = _clean_link(body)
     if ctx.db.one("SELECT id FROM links WHERE url = ?", (data["url"],)):
         raise HTTPException(409, "That address is already in your links.")
+    data["category"] = use_category(ctx, data["category"])
     columns = ", ".join(data)
     marks = ", ".join(f":{key}" for key in data)
-    ctx.db.execute(f"INSERT INTO links ({columns}) VALUES ({marks})", data)
-    return {"links": _links(ctx)}
+    cursor = ctx.db.execute(f"INSERT INTO links ({columns}) VALUES ({marks})", data)
+    return {"links": _links(ctx), "id": cursor.lastrowid}
 
 
 @router.put("/links/{link_id}")
@@ -158,15 +169,19 @@ def edit_link(link_id: int, body: LinkBody, ctx: Context = Depends(get_context))
     clash = ctx.db.one("SELECT id FROM links WHERE url = ? AND id != ?", (data["url"], link_id))
     if clash:
         raise HTTPException(409, "That address is already in your links.")
+    data["category"] = use_category(ctx, data["category"])
     assignments = ", ".join(f"{key} = :{key}" for key in data)
     ctx.db.execute(f"UPDATE links SET {assignments} WHERE id = :id", {**data, "id": link_id})
-    return {"links": _links(ctx)}
+    _refile(ctx)
+    return {"links": _links(ctx), "id": link_id}
 
 
 @router.delete("/links/{link_id}")
 def delete_link(link_id: int, ctx: Context = Depends(get_context)) -> dict[str, Any]:
     """Remove a link from the directory; the ZIM built from it stays in the library."""
     ctx.db.execute("DELETE FROM links WHERE id = ?", (link_id,))
+    icons.path(ctx.config.state_dir, "link", link_id).unlink(missing_ok=True)
+    _refile(ctx)
     return {"links": _links(ctx)}
 
 
@@ -286,6 +301,10 @@ def _parse_csv(ctx: Context, text: str) -> list[dict[str, Any]]:
         if entry["rate_unit"] not in RATE_UNITS:
             problems.append("rate_unit must be second or minute")
         entry["language"] = raw.get("language", "")[:10]
+        try:
+            entry["category"] = clean_category(raw.get("category", ""))
+        except HTTPException as exc:
+            problems.append(str(exc.detail))
         entry["notes"] = raw.get("notes", "")[:1000]
         if problems:
             entry.update(status="invalid", why="; ".join(problems))
@@ -318,6 +337,7 @@ def import_links(body: CsvBody, ctx: Context = Depends(get_context)) -> dict[str
             if row["status"] != "new":
                 continue
             values = {f: (int(row[f]) if isinstance(row[f], bool) else row[f]) for f in fields}
+            values["category"] = use_category(ctx, values["category"])
             ctx.db.execute(
                 f"INSERT OR IGNORE INTO links ({', '.join(fields)}) "
                 f"VALUES ({', '.join(':' + f for f in fields)})",
@@ -354,7 +374,7 @@ def export_links(ctx: Context = Depends(get_context)) -> Response:
 def _uploads(ctx: Context) -> list[dict[str, Any]]:
     rows = ctx.db.all(
         "SELECT u.id, u.filename, u.kind, u.size, u.title, u.images, u.book_id, u.last_built, "
-        "u.created, b.title AS book_title, b.size AS book_size FROM uploads u "
+        "u.created, u.category, u.icon, b.title AS book_title, b.size AS book_size FROM uploads u "
         "LEFT JOIN books b ON b.id = u.book_id AND u.book_id != '' ORDER BY u.id DESC"
     )
     latest = {
@@ -415,6 +435,23 @@ class UploadOptions(BaseModel):
     images: bool = True
 
 
+class UploadFiling(BaseModel):
+    category: str = Field(default="", max_length=80)
+
+
+@router.put("/uploads/{upload_id}")
+def file_upload(
+    upload_id: int, body: UploadFiling, ctx: Context = Depends(get_context)
+) -> dict[str, Any]:
+    """File the book made from an upload under a category; nothing is converted again."""
+    if ctx.db.one("SELECT id FROM uploads WHERE id = ?", (upload_id,)) is None:
+        raise HTTPException(404, "No such upload")
+    category = use_category(ctx, body.category)
+    ctx.db.execute("UPDATE uploads SET category = ? WHERE id = ?", (category, upload_id))
+    _refile(ctx)
+    return {"uploads": _uploads(ctx)}
+
+
 @router.post("/uploads/{upload_id}/build")
 def build_upload(
     upload_id: int, body: UploadOptions, ctx: Context = Depends(get_context)
@@ -437,6 +474,8 @@ def delete_upload(upload_id: int, ctx: Context = Depends(get_context)) -> dict[s
     if row:
         Path(row["path"]).unlink(missing_ok=True)
         ctx.db.execute("DELETE FROM uploads WHERE id = ?", (upload_id,))
+        icons.path(ctx.config.state_dir, "upload", upload_id).unlink(missing_ok=True)
+        _refile(ctx)
     return {"uploads": _uploads(ctx)}
 
 

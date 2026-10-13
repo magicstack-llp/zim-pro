@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Navigate, NavLink, Outlet, Route, Routes, useLocation } from "react-router-dom";
 import type { UpdateItem } from "./lib/api";
+import { NetworkPanel } from "./Network";
 import { ThemePicker } from "./ThemePicker";
 import { useData, useLive } from "./lib/live";
 import Ask from "./pages/Ask";
@@ -97,7 +98,8 @@ function Shell() {
             <Badge count={"badge" in link ? link.badge : undefined} />
           </NavLink>
         ))}
-        <div className="mt-auto pt-3">
+        <div className="mt-auto space-y-2 pt-3">
+          <NetworkPanel />
           <ThemePicker />
         </div>
       </nav>
@@ -135,7 +137,8 @@ function Shell() {
                 <Badge count={"badge" in link ? link.badge : undefined} />
               </NavLink>
             ))}
-            <div className="mt-2 border-t border-zinc-200 px-1 pt-3 dark:border-zinc-800">
+            <div className="mt-2 space-y-3 border-t border-zinc-200 px-1 pt-3 dark:border-zinc-800">
+              <NetworkPanel large />
               <ThemePicker large />
             </div>
           </div>

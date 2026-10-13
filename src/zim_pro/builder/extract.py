@@ -92,6 +92,10 @@ class Prepared:
     links: list[str] = field(default_factory=list)  # pages this one points to
     resources: list[tuple[str, str]] = field(default_factory=list)  # (address, kind)
     icon: str = ""
+    # Every icon the page names for itself, the most fitting first; and the picture it
+    # gives to be shown where it is shared, which will do when there is no icon.
+    icons: list[str] = field(default_factory=list)
+    share_picture: str = ""
     fell_back: bool = False  # the cleaned article was too thin, so the whole body was kept
 
 
@@ -153,6 +157,37 @@ def _best_image(node, base: str) -> str:
     return normalise(src, base) if src else ""
 
 
+def _icons(tree: HTMLParser, base: str) -> list[str]:
+    """The pictures a page names for itself: touch icons, then icons.
+
+    Larger and plainer first: a touch icon is a square made to be shown on its own. Vector
+    icons come last, as they cannot be drawn here.
+    """
+
+    def size(node) -> int:
+        match = re.match(r"(\d+)", node.attributes.get("sizes") or "")
+        return int(match.group(1)) if match else 0
+
+    ranked: list[tuple[int, int, str]] = []
+    for order, selector in enumerate(
+        ("link[rel~='apple-touch-icon'][href], link[rel~='apple-touch-icon-precomposed'][href]",
+         "link[rel~=icon][href]")
+    ):  # fmt: skip
+        for node in tree.css(selector):
+            address = normalise(node.attributes.get("href") or "", base)
+            if not address:
+                continue
+            vector = address.split("?")[0].lower().endswith(".svg") or "svg" in (
+                node.attributes.get("type") or ""
+            )
+            ranked.append((2 if vector else order, -size(node), address))
+    found: list[str] = []
+    for _, _, address in sorted(ranked, key=lambda item: item[:2]):
+        if address not in found:
+            found.append(address)
+    return found
+
+
 def prepare(
     html: bytes | str,
     url: str,
@@ -171,8 +206,12 @@ def prepare(
     language = (
         (tree.css_first("html").attributes.get("lang") or "") if tree.css_first("html") else ""
     )
-    icon_node = tree.css_first("link[rel~=icon][href], link[rel='apple-touch-icon'][href]")
-    icon = normalise(icon_node.attributes["href"], base) if icon_node else ""
+    icons = _icons(tree, base)
+    icon = icons[0] if icons else ""
+    shared = tree.css_first(
+        "meta[property='og:image'][content], meta[name='twitter:image'][content]"
+    )
+    share_picture = normalise(shared.attributes.get("content") or "", base) if shared else ""
     heading = _text(tree.css_first("h1"))
     described = tree.css_first("meta[name=description][content], meta[property='og:description']")
     description = " ".join((described.attributes.get("content") or "").split()) if described else ""
@@ -200,6 +239,8 @@ def prepare(
             fell_back = True  # keep everything rather than lose text to a bad guess
 
     result = Prepared(title or heading or url, "", "", language, canonical, description, icon=icon)
+    result.icons = icons
+    result.share_picture = share_picture
     result.fell_back = fell_back
     for address in styles:
         result.resources.append((address, "style"))

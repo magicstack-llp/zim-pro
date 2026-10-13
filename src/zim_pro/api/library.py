@@ -163,7 +163,7 @@ def suggest(q: str, book: str, count: int = 8, ctx: Context = Depends(get_contex
 
 
 SECRET_MASK = "••••••••"
-SECRET_SETTINGS = ("web_api_key",)
+SECRET_SETTINGS = ("web_api_key", "vpn_control_key", "vpn_control_password")
 CHOICES = {
     "default_policy": POLICIES,
     "web_mode": ("off", "api", "model"),
@@ -246,6 +246,7 @@ async def put_settings(
     for key, schemes in (
         ("build_proxy", ("http://", "https://")),
         ("captcha_solver_url", ("http://", "https://")),
+        ("vpn_control_url", ("http://", "https://")),
     ):
         if clean.get(key) and not clean[key].startswith(schemes):
             raise HTTPException(422, f"{key} must start with {' or '.join(schemes)}")
@@ -265,6 +266,8 @@ async def put_settings(
     if "catalog_refresh_hours" in clean:
         clean["catalog_refresh_hours"] = max(1, clean["catalog_refresh_hours"])
     ctx.db.set_settings(clean)
+    ctx.network.forget()
+    ctx.events.publish("network", {"settings": True})
     ctx.downloads._wake.set()
     ctx.builds._wake.set()
     ctx.feeds._wake.set()

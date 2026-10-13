@@ -59,7 +59,7 @@ export interface Build {
   skipped: number;
   size: number;
   error: string | null;
-  report: { pages?: number; files?: number; searchable?: boolean; downloaded?: number; reused_from_cache?: number; from_sitemaps?: number; from_feeds?: number; rss?: boolean; slowed?: number; solved?: number; new?: number; found?: number; articles?: number; dropped?: number; unchanged?: boolean };
+  report: { pages?: number; files?: number; searchable?: boolean; downloaded?: number; reused_from_cache?: number; from_sitemaps?: number; from_feeds?: number; rss?: boolean; slowed?: number; solved?: number; address_changes?: number; new?: number; found?: number; articles?: number; dropped?: number; unchanged?: boolean };
   params?: { rebuild?: boolean; rss?: boolean; trigger?: "manual" | "schedule" };
   book_id: string;
   created: number;

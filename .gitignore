@@ -12,3 +12,4 @@ src/zim_pro/web/
 dist/
 build/
 *.spec
+zims
