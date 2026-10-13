@@ -4,10 +4,12 @@ from typing import Any
 from fastapi import HTTPException, Request
 from libzim.reader import Archive
 
+from .builder.jobs import BuildManager
 from .config import Config
 from .db import Database
 from .downloads.manager import DownloadManager
 from .events import EventBus
+from .feeds.manager import FeedManager
 from .library.archive_pool import ArchivePool
 from .library.scanner import Scanner
 
@@ -22,6 +24,8 @@ class Context:
     scanner: Scanner
     events: EventBus
     downloads: DownloadManager
+    builds: BuildManager
+    feeds: FeedManager
 
     def book(self, book_id: str) -> dict[str, Any] | None:
         return self.db.one("SELECT * FROM books WHERE id = ? AND error IS NULL", (book_id,))

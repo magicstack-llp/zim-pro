@@ -243,13 +243,29 @@ async def put_settings(
             raise HTTPException(422, f"{key} must be one of {', '.join(allowed)}")
     if clean.get("web_api_url") and not clean["web_api_url"].startswith(("http://", "https://")):
         raise HTTPException(422, "The search server address must start with http:// or https://")
+    for key, schemes in (
+        ("build_proxy", ("http://", "https://")),
+        ("captcha_solver_url", ("http://", "https://")),
+    ):
+        if clean.get(key) and not clean[key].startswith(schemes):
+            raise HTTPException(422, f"{key} must start with {' or '.join(schemes)}")
     if "ai_max_sources" in clean:
         clean["ai_max_sources"] = max(1, min(12, clean["ai_max_sources"]))
-    for key, low, high in (("max_concurrent_downloads", 1, 8), ("connections_per_file", 1, 16)):
+    for key, low, high in (
+        ("max_concurrent_downloads", 1, 8),
+        ("connections_per_file", 1, 16),
+        ("max_concurrent_builds", 1, 4),
+        ("max_concurrent_feed_syncs", 1, 4),
+        ("feed_default_interval", 5, 525_600),
+        ("build_workers", 1, 16),
+        ("upload_limit_mb", 1, 200_000),
+    ):
         if key in clean:
             clean[key] = max(low, min(high, clean[key]))
     if "catalog_refresh_hours" in clean:
         clean["catalog_refresh_hours"] = max(1, clean["catalog_refresh_hours"])
     ctx.db.set_settings(clean)
     ctx.downloads._wake.set()
+    ctx.builds._wake.set()
+    ctx.feeds._wake.set()
     return _public_settings(ctx)

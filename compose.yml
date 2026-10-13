@@ -14,5 +14,68 @@ services:
     volumes:
       - /mnt/storage/Media/Kiwix/data:/data
       - ./state:/state
+      # Only for browser capture (Zimit) on the Create page. This gives the container
+      # control of Docker on this machine, so leave it off unless you need it; see README.
+      # - /var/run/docker.sock:/var/run/docker.sock
+    # group_add:
+    #   - "999"   # the docker group's gid here: getent group docker
     # environment:
     #   KIWIX_ADMIN_TOKEN: change-me   # required for changes and /mcp when set
+
+  # ---------------------------------------------------------------------------------------
+  # Optional helpers for the Create and Feeds pages. Uncomment what you need, run
+  # `docker compose up -d`, then fill in Settings -> Create. The README explains each.
+  # ---------------------------------------------------------------------------------------
+
+  # A captcha solver (FlareSolverr): gets past the "checking your browser" pages some
+  # sites put up (Cloudflare, DDoS-Guard). It does not solve picture or checkbox captchas.
+  #
+  # On its own (no VPN): Settings -> Create -> Captcha solver = http://flaresolverr:8191
+  #
+  # flaresolverr:
+  #   image: ghcr.io/flaresolverr/flaresolverr:latest
+  #   container_name: flaresolverr
+  #   restart: unless-stopped
+  #   environment:
+  #     LOG_LEVEL: info
+  #     TZ: Etc/UTC
+
+  # A VPN (Gluetun): pages for links and feeds are fetched through it; the rest of Zim Pro
+  # (the web interface, catalog and ZIM downloads) keeps using your own connection.
+  #
+  #   Settings -> Create -> Proxy          = http://gluetun:8888
+  #   Settings -> Create -> Captcha solver = http://gluetun:8191   (if you use both)
+  #
+  # Fill in your provider's details: https://github.com/qdm12/gluetun-wiki
+  #
+  # gluetun:
+  #   image: qmcgaw/gluetun:latest
+  #   container_name: gluetun
+  #   restart: unless-stopped
+  #   cap_add:
+  #     - NET_ADMIN
+  #   devices:
+  #     - /dev/net/tun:/dev/net/tun
+  #   environment:
+  #     VPN_SERVICE_PROVIDER: mullvad          # your provider
+  #     VPN_TYPE: wireguard
+  #     WIREGUARD_PRIVATE_KEY: change-me
+  #     WIREGUARD_ADDRESSES: 10.64.0.2/32
+  #     SERVER_COUNTRIES: Netherlands
+  #     HTTPPROXY: "on"                        # the proxy Zim Pro uses, on port 8888
+  #     TZ: Etc/UTC
+  #
+  # With the VPN, the solver must leave through the same address as Zim Pro's requests, or
+  # the clearance it earns is refused. So run it inside Gluetun's network in place of the
+  # stand-alone service above:
+  #
+  # flaresolverr:
+  #   image: ghcr.io/flaresolverr/flaresolverr:latest
+  #   container_name: flaresolverr
+  #   restart: unless-stopped
+  #   network_mode: "service:gluetun"          # reached as http://gluetun:8191
+  #   depends_on:
+  #     - gluetun
+  #   environment:
+  #     LOG_LEVEL: info
+  #     TZ: Etc/UTC

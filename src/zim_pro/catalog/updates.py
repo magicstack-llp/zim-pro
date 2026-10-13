@@ -32,6 +32,8 @@ def book_updates(db: Database) -> list[dict[str, Any]]:
 
     result = []
     for book in db.all("SELECT * FROM books ORDER BY title COLLATE NOCASE"):
+        if book["category"] == "custom":
+            continue  # made here, not published by Kiwix: updated from the Create page
         latest = _latest(by_stem.get(book["id"], [])) or _latest(
             by_name.get((book["name"], book["flavour"]), [])
         )

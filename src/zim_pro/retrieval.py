@@ -22,7 +22,7 @@ from typing import Any
 
 from .context import Context
 from .library import search as zim_search
-from .library.article import media, to_markdown
+from .library.article import media, source_url, to_markdown
 from .library.reader import read_article
 from .providers import AIError, Provider, complete, split_reasoning
 
@@ -528,7 +528,9 @@ def rank(
             break
     for item in chosen:
         try:
-            item["media"] = media(item.pop("article"), item["row"]["id"])
+            article = item.pop("article")
+            item["media"] = media(article, item["row"]["id"])
+            item["original"] = source_url(article)
         except Exception:
             item["media"] = []
     return chosen, len(read)

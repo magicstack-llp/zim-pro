@@ -112,6 +112,15 @@ def media(article: Article, book_id: str, limit: int = 8) -> list[dict[str, str]
     return found
 
 
+def source_url(article: Article) -> str:
+    """The web address a saved page came from, when the page records it."""
+    if not article.mimetype.startswith("text/html"):
+        return ""
+    node = HTMLParser(article.content[:20000]).css_first("link[rel=canonical][href]")
+    href = (node.attributes.get("href") or "").strip() if node else ""
+    return href if href.startswith(("http://", "https://")) else ""
+
+
 def _place_media(tree: Any, article_path: str, book_id: str) -> None:
     """Keep an article's pictures in its Markdown page, and link its videos.
 

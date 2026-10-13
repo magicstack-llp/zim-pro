@@ -76,6 +76,8 @@ class Source:
     coverage: float = 0.0
     # Pictures, videos and recordings on the page, shown beside the source.
     media: list[dict[str, str]] = field(default_factory=list)
+    # The web address the article was saved from, for books made from links.
+    original: str = ""
 
 
 def system_prompt(base: str, citing: bool, instructions: str = "") -> str:
@@ -135,6 +137,7 @@ def library_sources(passages: list[dict[str, Any]]) -> list[Source]:
             path=item["path"],
             coverage=item["coverage"],
             media=item.get("media", []),
+            original=item.get("original", ""),
         )
         for index, item in enumerate(passages, 1)
     ]

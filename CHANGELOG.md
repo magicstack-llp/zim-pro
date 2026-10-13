@@ -7,6 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Create your own ZIMs.** A Create page with a directory of links, uploads, and a job list.
+  - Links: save one page, a section or a whole site; clean-article or full-page mode;
+    pictures and video on or off; CSV import with a preview, and export; Create and Update
+    per link; optional automatic rebuild every N days.
+  - Two capture engines per link: a built-in multithreaded crawler, and browser capture with
+    Zimit for sites that need JavaScript (opt-in: it needs the Docker socket).
+  - Uploads: PDF, EPUB, MOBI and AZW3 books are converted to readable, searchable pages with
+    the original file kept inside the ZIM; ZIM files are checked and added as they are.
+  - The crawler reads `robots.txt` (rules and Crawl-delay) and the site's sitemaps before
+    any page, wherever the sitemaps are kept, and feeds them and followed links through one
+    queue that holds each address once. An option includes a site's subdomains.
+  - A site that answers "too many requests" (HTTP 429) is waited for as long as it asks and
+    fetched more slowly afterwards, so no page is lost to it.
+  - Builds can be paused and resumed; paused builds have their own tab.
+  - Builds run as jobs (queued, processing, finished, failed, cancelled) with live progress
+    and a list of anything that failed or was skipped. Every ZIM is verified against what
+    was prepared before it enters the library.
+- **Feeds.** A Feeds page that keeps ZIMs up to date from RSS and Atom feeds, with its own
+  engine, queue, schedule and settings.
+  - A collection holds any number of feeds and makes one ZIM, with a first page listing
+    every article by month.
+  - Only new articles are fetched; the ZIM is rewritten from what is kept on disk, and left
+    alone when nothing is new.
+  - A schedule per collection (minutes, hours or days), a limit on articles kept, full
+    article or feed text, feed discovery from a site's address, OPML import and export,
+    retry of failed articles, and pause and resume of syncs.
+- Links: a rate limit (requests per second or per minute), sitemap addresses to read, and
+  the address of the `robots.txt` to obey.
+- Links: RSS feeds of the site with a schedule of their own. New articles are added to the
+  ZIM without crawling the site again; the full rebuild keeps its own schedule.
+- A proxy setting for everything fetched for links and feeds, and a captcha solver setting
+  (FlareSolverr) for sites that answer with a browser check. `compose.yml` has optional
+  Gluetun (VPN) and FlareSolverr services, commented out.
+- Ask AI sources from books made from links show a link to the original page.
+- A "My ZIMs" category for books made here; they are left out of the catalog update list.
+
+### Fixed
+
+- Builds in progress when the server is restarted are queued again, not marked cancelled.
+- The library scan no longer picks up ZIM files inside hidden folders.
+
 ## [0.2.1] - 2026-10-12
 
 ### Added

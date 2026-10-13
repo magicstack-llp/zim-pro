@@ -18,6 +18,8 @@ def category_of(book_id: str, tags: str) -> str:
     match = _TAG_CATEGORY.search(tags)
     if match:
         return match.group(1).strip()
+    if book_id.startswith("custom_"):
+        return "custom"
     if book_id.startswith("devdocs_"):
         return "devdocs"
     if _STACK_EXCHANGE.search(book_id):

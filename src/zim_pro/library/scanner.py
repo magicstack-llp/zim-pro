@@ -101,6 +101,8 @@ class Scanner:
         for path in sorted(self.data_dir.rglob("*.zim")):
             if not path.is_file():
                 continue
+            if any(part.startswith(".") for part in path.relative_to(self.data_dir).parts):
+                continue  # a hidden folder: work in progress, not part of the library
             try:
                 stat = path.stat()
             except OSError:

@@ -30,6 +30,19 @@ DEFAULT_SETTINGS: dict[str, int | bool | str] = {
     "default_policy": "notify",
     "keep_old_versions": False,
     "mcp_allow_writes": False,
+    # Making ZIMs: how many builds run at once, and how many threads each one uses.
+    "max_concurrent_builds": 1,
+    "build_workers": 4,
+    "upload_limit_mb": 2048,
+    # Fetching for builds and feeds: a proxy every request goes through (a VPN container's
+    # HTTP proxy, say), and a FlareSolverr address for sites that put up a browser check.
+    "build_proxy": "",
+    "captcha_solver_url": "",
+    # Feeds: ZIMs kept up to date from RSS. Their syncs have a queue of their own.
+    "feed_auto_sync": True,
+    "max_concurrent_feed_syncs": 1,
+    "feed_default_interval": 60,
+    "feed_default_keep": 0,
     # Remember the searches made on the Search page.
     "search_history": True,
     # Ask AI. Providers live in their own table; these pick the defaults among them.

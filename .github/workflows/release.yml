@@ -187,6 +187,7 @@ jobs:
         run: |
           uv run --no-sync --with pyinstaller pyinstaller --noconfirm --onefile --name zim-pro \
             --collect-all zim_pro --collect-all libzim --collect-submodules uvicorn \
+            --collect-all pypdfium2 --collect-all pypdfium2_raw --collect-all mobi \
             packaging/entry.py
       - name: Check it starts and serves the app
         run: |

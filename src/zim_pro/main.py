@@ -8,12 +8,15 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from . import mcp_server, providers, scheduler
-from .api import ai, catalog, content, downloads, library
+from .api import ai, build, catalog, content, downloads, library
+from .api import feeds as feeds_api
+from .builder.jobs import BuildManager
 from .config import Config
 from .context import Context
 from .db import Database
 from .downloads.manager import DownloadManager
 from .events import EventBus
+from .feeds.manager import FeedManager
 from .library.archive_pool import ArchivePool
 from .library.scanner import Scanner
 
@@ -28,7 +31,9 @@ def build_context(config: Config) -> Context:
     scanner = Scanner(db, pool, config.data_dir)
     events = EventBus()
     manager = DownloadManager(db, events, scanner, pool, config.data_dir)
-    return Context(config, db, pool, scanner, events, manager)
+    builds = BuildManager(db, events, scanner, pool, config.data_dir, config.state_dir)
+    feeds = FeedManager(db, events, scanner, pool, config.data_dir, config.state_dir)
+    return Context(config, db, pool, scanner, events, manager, builds, feeds)
 
 
 def find_web_dir(config: Config) -> Path | None:
@@ -50,10 +55,14 @@ def create_app(config: Config | None = None) -> FastAPI:
         result = await asyncio.to_thread(ctx.scanner.scan)
         log.info("library scanned: %s", result)
         await ctx.downloads.start()
+        await ctx.builds.start()
+        await ctx.feeds.start()
         background = asyncio.create_task(scheduler.run(ctx))
         async with mcp.session_manager.run():
             yield
         background.cancel()
+        await ctx.feeds.stop()
+        await ctx.builds.stop()
         await ctx.downloads.stop()
         ctx.db.close()
 
@@ -68,7 +77,7 @@ def create_app(config: Config | None = None) -> FastAPI:
                 return JSONResponse({"detail": "admin token required"}, 401)
         return await call_next(request)
 
-    for module in (content, library, catalog, downloads, ai):
+    for module in (content, library, catalog, downloads, ai, build, feeds_api):
         app.include_router(module.router)
     app.router.routes.extend(mcp_app.routes)
 

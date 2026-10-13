@@ -73,6 +73,11 @@ come from Wikipedia and Appropedia, which publish them under Creative Commons li
 - **Downloads** – multi-connection across the Kiwix mirrors, SHA-1 checked per 4 MiB piece
   and SHA-256 checked at the end. Resumes after a pause, a restart or a crash.
 - **Catalog** – browse the whole Kiwix library and add books.
+- **Create** – make your own ZIMs: from web links (one page, a section or a whole site), and
+  from PDF, EPUB and Kindle books you upload. They are read, searched and cited by Ask AI
+  like any other book.
+- **Feeds** – ZIMs kept up to date from RSS and Atom feeds: several feeds in one ZIM, synced
+  on a schedule, fetching only the articles that are new.
 - **MCP** – the library as tools for Claude and other LLM apps: streamable HTTP at `/mcp`,
   or stdio with `zim-pro mcp`.
 - **Phone-friendly** – installable as a web app, with a layout made for small screens.
@@ -201,6 +206,191 @@ Download limits, the update schedule and policies are set in the web UI under Se
 The project was first called Kiwix Updater. The `KIWIX_*` variables and the database file
 (`kiwix-updater.sqlite3`) keep that name so existing installs carry on unchanged, and the
 `kiwix-updater` command still works alongside `zim-pro`.
+
+## Create your own ZIMs
+
+The **Create** page makes ZIM files that land in your library and work everywhere else in the
+app, including Ask AI and MCP. Each build runs in the background as a job: queued, then
+processing (fetching, converting, writing, checking), then finished or failed. A build can be
+**paused** while it waits or works and **resumed** from where it stopped; paused builds have
+their own tab on the Jobs list and give their place to the next build in the queue.
+
+### From links
+
+Add a web address, choose what to save, and press **Create ZIM**. Each link makes one ZIM;
+**Update** fetches it again and replaces the old one. A link can also rebuild itself every
+so many days.
+
+| Option | Choices |
+|---|---|
+| What to save | This page, the pages under this address, or the whole site, with limits on pages and depth |
+| Include subdomains | With "whole site": also save `blog.example.org`, `docs.example.org` and so on for `example.org` |
+| How to capture | **Built-in** (fast, small, no JavaScript) or **Browser (Zimit)** for sites that only render in a browser |
+| Page content | **Clean article** (the article without menus, ads and scripts) or **Full page** (the page and its styles) |
+| Pictures | Included, or replaced by their descriptions |
+| Video and audio | Included, or left as a link to the original (off by default: they are large) |
+| Rate limit | The most requests to the site per second or per minute. 0 is automatic: about 8 a second, or the `Crawl-delay` in the site's `robots.txt` |
+| Sitemaps | One or more sitemap addresses to read, one per line. Empty: they are looked for (see below) |
+| robots.txt | The address of the rules to obey, if they are not at the site's `/robots.txt` |
+| RSS feeds | The site's own RSS or Atom feeds, one per line, with a schedule of their own (see below) |
+
+Many links at once: **Import CSV**. Only a `url` column is required; `title`, `scope`
+(`page`, `path`, `site`), `subdomains`, `engine` (`builtin`, `zimit`), `mode` (`clean`,
+`full`), `images`, `video` (`yes`, `no`), `max_pages`, `sitemaps` (addresses separated by
+spaces), `robots_url`, `rate_limit`, `rate_unit` (`second`, `minute`), `feeds` and `feed_minutes` are optional. The
+file is checked first and shows which rows are new, already there, or unreadable, and nothing is added until you confirm. **Export
+CSV** writes the same format back.
+
+```csv
+url,title,scope,images
+https://example.org/guide/,Example guide,path,yes
+https://example.org/faq.html,,page,no
+```
+
+The built-in crawler asks a site what it wants before fetching its pages:
+
+- **`robots.txt` first.** It says what may be fetched, and how fast (`Crawl-delay`), and both
+  are obeyed. Each subdomain has its own.
+- **Sitemaps next.** The ones `robots.txt` names are read; if it names none, the usual places
+  are tried (`/sitemap.xml`, `/sitemap_index.xml`, `/wp-sitemap.xml`, a sitemap beside the
+  section you asked for, and others), including sitemap indexes, gzipped and plain-text ones.
+  This finds pages that no other page links to.
+- **One queue, each page once.** Pages from sitemaps and pages found by following links go
+  through the same queue. An address is only ever queued once, however it is spelled: with
+  or without `www`, `http` or `https`, a `#fragment`, or tracking parameters.
+- **"Too many requests" is respected.** When a site answers HTTP 429 (or 503 with
+  `Retry-After`), the crawler waits as long as the site asks, or 5 seconds doubling each
+  time if it does not say, then tries that page again and fetches more slowly from that
+  site for the rest of the build. The job shows that it is waiting. A page is only given up
+  on, and listed as failed, if the site still refuses after six waits.
+- A cache per link means an update only downloads what changed.
+
+**Keeping a site current without crawling it again.** A link has two schedules:
+
+- **Rebuild the whole site** every N days crawls everything again. It is the only way to
+  pick up pages that changed, and it is slow for a big site.
+- **RSS feeds**, checked every so many minutes, hours or days (no more often than every 5
+  minutes). When the site's feeds list an article that is not in the ZIM yet, only that
+  article and its pictures are fetched; every page saved before is taken from the cache on
+  disk and the ZIM is written again with the new article in it. If the feeds list nothing
+  new, nothing is written. **Check RSS** on a link does the same on request.
+
+Articles that came in through a feed stay in the ZIM when the whole site is rebuilt, even
+after they have dropped off the end of the feed. To follow feeds from several sites in one
+ZIM, without saving a site, use the Feeds page.
+
+What you save and how you use it is your responsibility: check a site's terms before copying
+it.
+
+### From books
+
+Drop a **PDF**, **EPUB**, **MOBI** or **AZW3** file on the Uploads tab. It is converted to
+readable, searchable pages (an EPUB by chapter, a PDF by page) and the original file is kept
+inside the ZIM, linked from its first page. A **ZIM** file is checked and added as it is.
+
+- A PDF keeps a picture of each page beside its text unless you turn pictures off, so scanned
+  pages and complex layouts lose nothing. A PDF with no text layer can be read but not
+  searched; there is no OCR.
+- Books protected by DRM cannot be converted.
+
+### How the ZIMs are made
+
+Pages are fetched several at a time, cleaned and converted on worker threads, and compressed
+and indexed on libzim's own threads (Settings → Create sets how many). Before a ZIM enters the
+library it is opened again and compared with what was prepared: the page count, every file,
+and a sample of pages byte for byte. Each job keeps a list of anything that failed or was
+skipped, with the reason. Only real pages are marked as articles and the full-text index is
+built from their cleaned text, so search and Ask AI match what a reader sees. The files pass
+openZIM's `zimcheck`.
+
+### Browser capture (Zimit)
+
+Zimit records pages in a real browser. It runs as a separate container, so Zim Pro needs
+access to Docker to start it: mount the Docker socket and let the container's user use it.
+
+```yaml
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    group_add:
+      - "999"          # the gid of the docker group on your host: getent group docker
+```
+
+**Mounting the Docker socket gives the container control of Docker on the host, which is
+equivalent to root there.** Leave it out unless you need browser capture and trust what runs
+in the container. Without it, the option is shown as unavailable and everything else works.
+The first capture downloads the Zimit image (about 1.5 GB).
+
+### Sites that block or check visitors: captcha solver and VPN
+
+Two optional helper containers are in `compose.yml`, commented out. They apply to pages
+fetched by the built-in crawler and by Feeds, not to Zimit captures, the catalog or ZIM
+downloads. Both are set under **Settings → Create**.
+
+**Captcha solver ([FlareSolverr](https://github.com/FlareSolverr/FlareSolverr)).** Some sites
+answer a plain request with a "checking your browser" page (Cloudflare's "Just a moment…",
+DDoS-Guard). With a solver set, Zim Pro hands such a page to FlareSolverr, which opens it in
+a real browser, and then carries on with the clearance it earned, so pictures and later
+pages are fetched the normal way. Without one, such pages are listed as failed with a note
+saying why.
+
+- Uncomment the `flaresolverr` service and set **Captcha solver** to
+  `http://flaresolverr:8191`.
+- It gets past browser checks. It does **not** solve picture or checkbox captchas
+  (reCAPTCHA, hCaptcha, Turnstile widgets), and a site can still refuse it.
+- It is slow (a browser per page) and uses a few hundred MB of memory.
+
+**VPN ([Gluetun](https://github.com/qdm12/gluetun)).** Gluetun connects to your VPN provider
+and offers an HTTP proxy. Set **Proxy** to `http://gluetun:8888` and every page fetched for
+a link or a feed leaves through the VPN, while the web interface and everything else keep
+using your own connection.
+
+- Uncomment the `gluetun` service and fill in your provider's details; the
+  [Gluetun wiki](https://github.com/qdm12/gluetun-wiki) has them for each provider.
+  `HTTPPROXY: "on"` must stay.
+- **Using both:** a clearance is tied to the address that earned it, so the solver must
+  leave through the same VPN. Use the second `flaresolverr` block in `compose.yml` (the one
+  with `network_mode: "service:gluetun"`) in place of the first, and set **Captcha solver**
+  to `http://gluetun:8191`.
+- The proxy must be `http://` or `https://`; SOCKS is not supported.
+
+Getting past a site's checks does not change what you are allowed to copy: its terms still
+apply.
+
+## Feeds
+
+The **Feeds** page keeps ZIMs up to date from RSS and Atom feeds. It is separate from the
+Create page: its own engine, its own queue (so a long crawl never holds up the news), its
+own schedule and its own settings.
+
+A **collection** is one or more feed addresses kept as a single ZIM. Its first page lists
+every article, newest first, by month.
+
+- **Add feeds** by address, or type a site's address and press **Find feeds** to see the
+  feeds it advertises. **Import OPML** brings in the feeds from another reader, one
+  collection per folder; **Export OPML** writes yours out.
+- **Only new articles are fetched.** Each sync reads the feeds, downloads the articles it
+  has not seen, and writes the ZIM again from what it already keeps on disk. If nothing is
+  new, the ZIM is left alone.
+- **Schedule** per collection: every so many minutes, hours or days (no more often than
+  every 5 minutes), or only when you press **Sync now**.
+- **Full article or feed text.** By default each article's page is opened and saved,
+  cleaned like a link on the Create page. If the page cannot be had (gone, paywalled,
+  blocked by `robots.txt`), what the feed itself carries is saved in its place. Turn "Fetch
+  the full article" off to save only the feed's own text.
+- **Articles to keep**: the newest N stay in the ZIM and older ones drop out; 0 keeps
+  everything.
+- **Pictures, video and audio, rate limit** as for links.
+- **Articles** lists what a collection holds and what failed, with the reason; **Retry
+  failed** asks for those again, and **Rebuild** writes the ZIM again from scratch.
+- The **Syncs** tab is the queue: active, paused, finished and failed, with what each sync
+  found. The last hundred are kept.
+
+**Settings → Feeds** has the master switch for scheduled syncing, how many syncs run at
+once, and the defaults for new collections. The proxy and captcha solver under Settings →
+Create apply to feeds too.
+
+Feed ZIMs appear in the library under "My ZIMs" and are searched and cited by Ask AI like
+any other book.
 
 ## Ask AI
 

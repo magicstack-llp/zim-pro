@@ -43,6 +43,31 @@ export async function api<T = any>(path: string, init: RequestInit = {}, retry =
 export const post = <T = any>(path: string, body?: unknown) =>
   api<T>(path, { method: "POST", body: body === undefined ? undefined : JSON.stringify(body) });
 
+/** One run of making a ZIM, from a link or an uploaded book. */
+export interface Build {
+  id: number;
+  kind: "link" | "upload" | "feed";
+  source_id: number;
+  title: string;
+  state: "queued" | "processing" | "paused" | "finished" | "failed" | "cancelled";
+  phase: string;
+  /** Why nothing is moving right now, such as a site asking for a pause. */
+  detail?: string;
+  done: number;
+  total: number;
+  failed: number;
+  skipped: number;
+  size: number;
+  error: string | null;
+  report: { pages?: number; files?: number; searchable?: boolean; downloaded?: number; reused_from_cache?: number; from_sitemaps?: number; from_feeds?: number; rss?: boolean; slowed?: number; solved?: number; new?: number; found?: number; articles?: number; dropped?: number; unchanged?: boolean };
+  params?: { rebuild?: boolean; rss?: boolean; trigger?: "manual" | "schedule" };
+  book_id: string;
+  created: number;
+  started: number | null;
+  finished: number | null;
+  log?: { kind: "failed" | "skipped" | "note"; target: string; why: string }[];
+}
+
 export interface Book {
   id: string;
   filename: string;

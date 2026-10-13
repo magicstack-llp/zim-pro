@@ -60,6 +60,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   phet: "PhET",
   mooc: "MOOC",
   gutenberg: "Project Gutenberg",
+  custom: "My ZIMs",
   other: "Other",
 };
 

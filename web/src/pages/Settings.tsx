@@ -16,6 +16,15 @@ interface SettingsData {
   keep_old_versions: boolean;
   mcp_allow_writes: boolean;
   search_history: boolean;
+  max_concurrent_builds: number;
+  build_workers: number;
+  upload_limit_mb: number;
+  build_proxy: string;
+  captcha_solver_url: string;
+  feed_auto_sync: boolean;
+  max_concurrent_feed_syncs: number;
+  feed_default_interval: number;
+  feed_default_keep: number;
   ai_provider: string;
   ai_model: string;
   ai_max_sources: number;
@@ -317,6 +326,27 @@ export default function Settings() {
             <Field label="Let LLM apps start updates" hint="Off: MCP clients can only search and read.">
               <input type="checkbox" className="h-4 w-4" checked={form.mcp_allow_writes} onChange={(e) => set("mcp_allow_writes", e.target.checked)} />
             </Field>
+          </section>
+          <section className="card divide-y divide-zinc-100 px-4 dark:divide-zinc-800">
+            <h2 className="py-3 font-medium">Create</h2>
+            <Field label="Builds at once" hint="How many ZIMs are made at the same time; the rest wait their turn.">{number("max_concurrent_builds", 1)}</Field>
+            <Field label="Threads per build" hint="Pages fetched and converted side by side, and the threads that compress the ZIM (1–16).">{number("build_workers", 1)}</Field>
+            <Field label="Largest upload (MB)" hint="Books and ZIM files above this size are refused.">{number("upload_limit_mb", 1)}</Field>
+            <Field label="Proxy" hint="Every page fetched for a link or a feed goes through it, such as a VPN container's HTTP proxy (http://gluetun:8888). Empty: fetch directly. Browser captures (Zimit) do not use it.">
+              <input className="input w-full font-mono text-xs sm:w-96" placeholder="http://gluetun:8888" value={form.build_proxy} onChange={(e) => set("build_proxy", e.target.value)} aria-label="Proxy address" />
+            </Field>
+            <Field label="Captcha solver" hint="A FlareSolverr address. When a site answers with a browser check (Cloudflare's &quot;Just a moment&quot;, DDoS-Guard), the page is opened there and the build carries on. It does not solve picture or checkbox captchas. Empty: such pages fail with a note.">
+              <input className="input w-full font-mono text-xs sm:w-96" placeholder="http://flaresolverr:8191" value={form.captcha_solver_url} onChange={(e) => set("captcha_solver_url", e.target.value)} aria-label="Captcha solver address" />
+            </Field>
+          </section>
+          <section className="card divide-y divide-zinc-100 px-4 dark:divide-zinc-800">
+            <h2 className="py-3 font-medium">Feeds</h2>
+            <Field label="Sync on schedule" hint="Check every feed collection for new articles at the interval it sets. Off: collections only sync when you press Sync.">
+              <input type="checkbox" className="h-4 w-4" checked={form.feed_auto_sync} onChange={(e) => set("feed_auto_sync", e.target.checked)} />
+            </Field>
+            <Field label="Syncs at once" hint="Feed syncs have their own queue, apart from the builds on the Create page (1–4).">{number("max_concurrent_feed_syncs", 1, 4)}</Field>
+            <Field label="Default interval (minutes)" hint="How often a new collection, or one imported from OPML, is checked.">{number("feed_default_interval", 5)}</Field>
+            <Field label="Default articles to keep" hint="The newest this many stay in a new collection's ZIM. 0 keeps every article.">{number("feed_default_keep", 0)}</Field>
           </section>
           <section className="card divide-y divide-zinc-100 px-4 dark:divide-zinc-800">
             <h2 className="py-3 font-medium">Search</h2>

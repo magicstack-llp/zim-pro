@@ -27,6 +27,8 @@ interface Source {
   site?: string;
   /** Pictures, videos and recordings on the source's page. */
   media?: Media[];
+  /** The web address the article was saved from, for books made from links. */
+  original?: string;
 }
 /** One thing the app did to answer: a search it ran, shown like a tool call. */
 interface Step {
@@ -200,6 +202,12 @@ function SourceCard({ source, hot, onHover }: { source: Source; hot: boolean; on
       </SourceLink>
       {/* Outside the link: a thumbnail opens the picture, not the article. */}
       <MediaStrip media={source.media ?? []} title={source.title} />
+      {source.original && (
+        <a className="muted hover:text-brand-700 dark:hover:text-brand-400 mt-2 flex items-center gap-1 truncate text-xs" href={source.original} target="_blank" rel="noreferrer" title={source.original}>
+          Original page
+          <Icon d={ICONS.external} className="h-3 w-3 shrink-0" />
+        </a>
+      )}
     </div>
   );
 }

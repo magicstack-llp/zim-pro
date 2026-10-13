@@ -5,7 +5,9 @@ import { ThemePicker } from "./ThemePicker";
 import { useData, useLive } from "./lib/live";
 import Ask from "./pages/Ask";
 import Catalog from "./pages/Catalog";
+import Create from "./pages/Create";
 import Downloads from "./pages/Downloads";
+import Feeds from "./pages/Feeds";
 import Library from "./pages/Library";
 import Reader from "./pages/Reader";
 import Search from "./pages/Search";
@@ -19,6 +21,8 @@ const ICONS = {
   updates: "M15.5 8A6 6 0 0 0 4.6 7M4.5 12a6 6 0 0 0 10.9 1M15.5 4v4h-4M4.5 16v-4h4",
   downloads: "M10 3.5v9M6 9l4 4 4-4M4 16.5h12",
   catalog: "M3.5 5.5h13v10h-13zM3.5 9h13M7.5 5.5v10",
+  create: "M10 4.5v11M4.5 10h11M4 4h12v12H4z",
+  feeds: "M4.5 15.5h.01M4 10.5a5.5 5.5 0 0 1 5.5 5.5M4 5a11 11 0 0 1 11 11",
   settings: "M4 6h7M15 6h1M4 14h1M9 14h7M13 4v4M7 12v4",
   more: "M5 10h.01M10 10h.01M15 10h.01",
 };
@@ -37,10 +41,12 @@ function Badge({ count }: { count?: number }) {
 }
 
 function Shell() {
-  const { downloads } = useLive();
+  const { downloads, builds, feeds } = useLive();
   const { pathname } = useLocation();
   const updates = useData<{ update_count: number; items: UpdateItem[] }>("/api/updates");
   const active = downloads.filter((d) => ["queued", "downloading", "verifying"].includes(d.state)).length;
+  const building = builds.filter((b) => b.state === "queued" || b.state === "processing").length;
+  const syncing = feeds.filter((b) => b.state === "queued" || b.state === "processing").length;
   const [more, setMore] = useState(false);
   useEffect(() => setMore(false), [pathname]);
   // Ask AI is an app-style screen that manages its own panels and scrolling.
@@ -53,6 +59,8 @@ function Shell() {
     { to: "/updates", label: "Updates", short: "Updates", icon: "updates", badge: updates.data?.update_count },
     { to: "/downloads", label: "Downloads", short: "Downloads", icon: "downloads", badge: active },
     { to: "/catalog", label: "Catalog", short: "Catalog", icon: "catalog" },
+    { to: "/create", label: "Create", short: "Create", icon: "create", badge: building },
+    { to: "/feeds", label: "Feeds", short: "Feeds", icon: "feeds", badge: syncing },
     { to: "/settings", label: "Settings", short: "Settings", icon: "settings" },
   ] as const;
   const tabs = links.slice(0, 4);
@@ -149,7 +157,7 @@ function Shell() {
         <button className={tab(more || inOverflow)} onClick={() => setMore(!more)} aria-expanded={more}>
           <span className="relative">
             <Icon name="more" className="h-[1.35rem] w-[1.35rem]" />
-            {active > 0 && <span className="bg-brand-600 absolute -top-1 -right-1.5 h-2 w-2 rounded-full ring-2 ring-white dark:ring-zinc-950" />}
+            {active + building > 0 && <span className="bg-brand-600 absolute -top-1 -right-1.5 h-2 w-2 rounded-full ring-2 ring-white dark:ring-zinc-950" />}
           </span>
           More
         </button>
@@ -171,6 +179,8 @@ export default function App() {
         <Route path="/updates" element={<Updates />} />
         <Route path="/downloads" element={<Downloads />} />
         <Route path="/catalog" element={<Catalog />} />
+        <Route path="/create" element={<Create />} />
+        <Route path="/feeds" element={<Feeds />} />
         <Route path="/settings" element={<Settings />} />
         <Route path="*" element={<Navigate to="/ask" replace />} />
       </Route>

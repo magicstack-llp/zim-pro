@@ -1,27 +1,39 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState, type ReactNode } from "react";
-import { api, type Download } from "./api";
+import { api, type Build, type Download } from "./api";
 
 interface Live {
   downloads: Download[];
+  /** ZIMs being made, newest first. */
+  builds: Build[];
+  /** Feed syncs, newest first: a queue of their own. */
+  feeds: Build[];
   /** Bumps whenever the library or catalog changes on the server. */
   revision: number;
   refresh: () => void;
 }
 
-const LiveContext = createContext<Live>({ downloads: [], revision: 0, refresh: () => {} });
+const LiveContext = createContext<Live>({ downloads: [], builds: [], feeds: [], revision: 0, refresh: () => {} });
 
 /** Keeps download progress and change notifications current over server-sent events. */
 export function LiveProvider({ children }: { children: ReactNode }) {
   const [downloads, setDownloads] = useState<Download[]>([]);
+  const [builds, setBuilds] = useState<Build[]>([]);
+  const [feeds, setFeeds] = useState<Build[]>([]);
   const [revision, setRevision] = useState(0);
   const refresh = useCallback(() => {
     api<Download[]>("/api/downloads").then(setDownloads).catch(() => {});
+    api<Build[]>("/api/build/jobs").then(setBuilds).catch(() => {});
+    api<Build[]>("/api/feeds/runs").then(setFeeds).catch(() => {});
     setRevision((value) => value + 1);
   }, []);
 
   useEffect(() => {
     api<Download[]>("/api/downloads").then(setDownloads).catch(() => {});
+    api<Build[]>("/api/build/jobs").then(setBuilds).catch(() => {});
+    api<Build[]>("/api/feeds/runs").then(setFeeds).catch(() => {});
     const source = new EventSource("/api/events");
+    source.addEventListener("builds", (event) => setBuilds(JSON.parse((event as MessageEvent).data)));
+    source.addEventListener("feeds", (event) => setFeeds(JSON.parse((event as MessageEvent).data)));
     source.addEventListener("downloads", (event) => setDownloads(JSON.parse((event as MessageEvent).data)));
     const bump = () => setRevision((value) => value + 1);
     source.addEventListener("library", bump);
@@ -29,7 +41,7 @@ export function LiveProvider({ children }: { children: ReactNode }) {
     return () => source.close();
   }, []);
 
-  return <LiveContext.Provider value={{ downloads, revision, refresh }}>{children}</LiveContext.Provider>;
+  return <LiveContext.Provider value={{ downloads, builds, feeds, revision, refresh }}>{children}</LiveContext.Provider>;
 }
 
 export const useLive = () => useContext(LiveContext);

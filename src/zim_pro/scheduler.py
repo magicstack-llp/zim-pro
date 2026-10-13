@@ -39,6 +39,42 @@ def queue_auto_updates(ctx: Context) -> int:
     return queued
 
 
+def _rebuild_due_links(ctx: Context) -> None:
+    """Queue a rebuild for every link whose ZIM is older than the link asks for."""
+    due = ctx.db.all(
+        "SELECT id, url, title FROM links WHERE rebuild_days > 0 AND book_id != '' "
+        "AND last_built IS NOT NULL AND last_built < unixepoch() - rebuild_days * 86400 "
+        "AND id NOT IN (SELECT source_id FROM builds WHERE kind = 'link' "
+        "AND (state IN ('queued', 'processing', 'paused') OR created > unixepoch() - 86400))"
+    )
+    for link in due:
+        try:
+            ctx.builds.enqueue("link", link["id"], link["title"] or link["url"])
+        except Exception:
+            log.exception("could not queue the rebuild of %s", link["url"])
+
+
+def _check_due_feeds(ctx: Context) -> None:
+    """Queue an update from its RSS feeds for every link whose time to look has come."""
+    due = ctx.db.all(
+        "SELECT id, url, title FROM links WHERE feeds != '' AND feed_minutes > 0 "
+        "AND engine = 'builtin' AND book_id != '' "
+        "AND COALESCE(last_feed_check, last_built, 0) + feed_minutes * 60 <= unixepoch() "
+        "AND id NOT IN (SELECT source_id FROM builds WHERE kind = 'link' "
+        "AND state IN ('queued', 'processing', 'paused'))"
+    )
+    for link in due:
+        try:
+            ctx.builds.enqueue(
+                "link",
+                link["id"],
+                link["title"] or link["url"],
+                {"rss": True, "trigger": "schedule"},
+            )
+        except Exception:
+            log.exception("could not queue the feed update of %s", link["url"])
+
+
 async def run(ctx: Context) -> None:
     """Background loop: rescan the library and keep the catalog fresh."""
     last_scan = time.monotonic()
@@ -50,6 +86,8 @@ async def run(ctx: Context) -> None:
             now = time.time()
             if now - refreshed >= interval and now >= retry_after:
                 await refresh_catalog(ctx)
+            _rebuild_due_links(ctx)
+            _check_due_feeds(ctx)
             if time.monotonic() - last_scan >= RESCAN_SECONDS:
                 last_scan = time.monotonic()
                 result = await asyncio.to_thread(ctx.scanner.scan)

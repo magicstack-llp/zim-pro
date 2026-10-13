@@ -10,11 +10,16 @@ requires-python = ">=3.13"
 keywords = ["zim", "kiwix", "offline", "wikipedia", "mcp", "rag", "knowledge-base"]
 dependencies = [
     "fastapi>=0.143.0",
+    "feedparser>=6.0.14",
     "httpx>=0.28.1",
     "libzim>=3.13.1",
     "markdownify>=1.2.3",
     "mcp>=2.3.0",
+    "mobi>=0.4.1",
+    "pillow>=12.3.0",
     "pydantic-settings>=2.15.0",
+    "pypdfium2>=5.14.0",
+    "python-multipart>=0.0.32",
     "selectolax>=1.0.0",
     "uvicorn[standard]>=0.54.0",
 ]

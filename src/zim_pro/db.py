@@ -119,6 +119,114 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     created REAL NOT NULL DEFAULT (unixepoch('subsec'))
 );
 CREATE INDEX IF NOT EXISTS chat_messages_chat ON chat_messages (chat_id, id);
+CREATE TABLE IF NOT EXISTS links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    url TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL DEFAULT '',
+    engine TEXT NOT NULL DEFAULT 'builtin',
+    scope TEXT NOT NULL DEFAULT 'page',
+    max_pages INTEGER NOT NULL DEFAULT 500,
+    max_depth INTEGER NOT NULL DEFAULT 5,
+    mode TEXT NOT NULL DEFAULT 'clean',
+    images INTEGER NOT NULL DEFAULT 1,
+    video INTEGER NOT NULL DEFAULT 0,
+    subdomains INTEGER NOT NULL DEFAULT 0,
+    sitemaps TEXT NOT NULL DEFAULT '',
+    robots_url TEXT NOT NULL DEFAULT '',
+    rate_limit REAL NOT NULL DEFAULT 0,
+    rate_unit TEXT NOT NULL DEFAULT 'second',
+    feeds TEXT NOT NULL DEFAULT '',
+    feed_minutes INTEGER NOT NULL DEFAULT 0,
+    last_feed_check REAL,
+    language TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    rebuild_days INTEGER NOT NULL DEFAULT 0,
+    book_id TEXT NOT NULL DEFAULT '',
+    last_built REAL,
+    created REAL NOT NULL DEFAULT (unixepoch('subsec'))
+);
+CREATE TABLE IF NOT EXISTS uploads (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    filename TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    size INTEGER NOT NULL DEFAULT 0,
+    path TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    images INTEGER NOT NULL DEFAULT 1,
+    book_id TEXT NOT NULL DEFAULT '',
+    last_built REAL,
+    created REAL NOT NULL DEFAULT (unixepoch('subsec'))
+);
+CREATE TABLE IF NOT EXISTS builds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    kind TEXT NOT NULL,
+    source_id INTEGER NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'queued',
+    phase TEXT NOT NULL DEFAULT '',
+    done INTEGER NOT NULL DEFAULT 0,
+    total INTEGER NOT NULL DEFAULT 0,
+    failed INTEGER NOT NULL DEFAULT 0,
+    skipped INTEGER NOT NULL DEFAULT 0,
+    size INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    log TEXT NOT NULL DEFAULT '[]',
+    report TEXT NOT NULL DEFAULT '{}',
+    params TEXT NOT NULL DEFAULT '{}',
+    book_id TEXT NOT NULL DEFAULT '',
+    created REAL NOT NULL DEFAULT (unixepoch('subsec')),
+    started REAL,
+    finished REAL
+);
+CREATE TABLE IF NOT EXISTS feeds (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL DEFAULT '',
+    language TEXT NOT NULL DEFAULT '',
+    notes TEXT NOT NULL DEFAULT '',
+    mode TEXT NOT NULL DEFAULT 'clean',
+    images INTEGER NOT NULL DEFAULT 1,
+    video INTEGER NOT NULL DEFAULT 0,
+    full_text INTEGER NOT NULL DEFAULT 1,
+    interval_minutes INTEGER NOT NULL DEFAULT 60,
+    keep INTEGER NOT NULL DEFAULT 0,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    rate_limit REAL NOT NULL DEFAULT 0,
+    rate_unit TEXT NOT NULL DEFAULT 'second',
+    book_id TEXT NOT NULL DEFAULT '',
+    last_attempt REAL,
+    last_synced REAL,
+    last_new INTEGER NOT NULL DEFAULT 0,
+    last_error TEXT,
+    created REAL NOT NULL DEFAULT (unixepoch('subsec'))
+);
+CREATE TABLE IF NOT EXISTS feed_sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feed_id INTEGER NOT NULL,
+    url TEXT NOT NULL,
+    title TEXT NOT NULL DEFAULT '',
+    site TEXT NOT NULL DEFAULT '',
+    last_checked REAL,
+    last_error TEXT,
+    UNIQUE (feed_id, url)
+);
+CREATE TABLE IF NOT EXISTS feed_items (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    feed_id INTEGER NOT NULL,
+    source_id INTEGER NOT NULL,
+    guid TEXT NOT NULL,
+    url TEXT NOT NULL DEFAULT '',
+    title TEXT NOT NULL DEFAULT '',
+    author TEXT NOT NULL DEFAULT '',
+    published REAL NOT NULL DEFAULT 0,
+    content TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'new',
+    tries INTEGER NOT NULL DEFAULT 0,
+    error TEXT,
+    path TEXT NOT NULL DEFAULT '',
+    added REAL NOT NULL DEFAULT (unixepoch('subsec')),
+    UNIQUE (feed_id, guid)
+);
+CREATE INDEX IF NOT EXISTS feed_items_feed ON feed_items (feed_id, state, published);
 CREATE TABLE IF NOT EXISTS searches (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     ts REAL NOT NULL DEFAULT (unixepoch('subsec')),
@@ -176,6 +284,22 @@ class Database:
             self._conn.execute(
                 "ALTER TABLE ai_providers ADD COLUMN enabled INTEGER NOT NULL DEFAULT 1"
             )
+        link_columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(links)")}
+        for column, kind in (
+            ("subdomains", "INTEGER NOT NULL DEFAULT 0"),
+            ("sitemaps", "TEXT NOT NULL DEFAULT ''"),
+            ("robots_url", "TEXT NOT NULL DEFAULT ''"),
+            ("rate_limit", "REAL NOT NULL DEFAULT 0"),
+            ("rate_unit", "TEXT NOT NULL DEFAULT 'second'"),
+            ("feeds", "TEXT NOT NULL DEFAULT ''"),
+            ("feed_minutes", "INTEGER NOT NULL DEFAULT 0"),
+            ("last_feed_check", "REAL"),
+        ):
+            if column not in link_columns:
+                self._conn.execute(f"ALTER TABLE links ADD COLUMN {column} {kind}")
+        build_columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(builds)")}
+        if "params" not in build_columns:
+            self._conn.execute("ALTER TABLE builds ADD COLUMN params TEXT NOT NULL DEFAULT '{}'")
         if "category" not in columns:
             self._conn.execute(
                 "ALTER TABLE books ADD COLUMN category TEXT NOT NULL DEFAULT 'other'"
