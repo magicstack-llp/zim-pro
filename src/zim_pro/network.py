@@ -42,12 +42,12 @@ class Network:
         self.changes = 0
         self.last_change: float | None = None
         self.last_change_error = ""
-        self._changed_at = 0.0  # monotonic
+        self._changed_at = float("-inf")  # monotonic; never, so far
         self._steady = asyncio.Event()
         self._steady.set()
         self._changing = asyncio.Lock()
         self._status: dict[str, Any] | None = None
-        self._status_at = 0.0
+        self._status_at = float("-inf")
         self._looking = asyncio.Lock()
         self._vpn_route = "vpn"  # older Gluetun releases call it "openvpn"
 
@@ -255,7 +255,7 @@ class Network:
 
     def forget(self) -> None:
         """Settings changed: what was seen before may no longer be true."""
-        self._status_at = 0.0
+        self._status_at = float("-inf")
 
     # -- another address ------------------------------------------------------------
 

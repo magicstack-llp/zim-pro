@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- In the first minute after the machine starts, an automatic change of VPN address was
+  refused as "too soon after the last one", and the VPN's state could show as empty.
+
 ## [0.4.0] - 2026-10-13
 
 ### Added
