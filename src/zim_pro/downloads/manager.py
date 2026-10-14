@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import os
 import shutil
@@ -9,15 +10,19 @@ from typing import Any
 import httpx
 from libzim.reader import Archive
 
+from .. import logs
 from ..db import Database
 from ..events import EventBus
 from ..library.archive_pool import ArchivePool
 from ..library.scanner import Scanner
+from ..queues import LocalBroker, new_place
 from . import metalink
 from .engine import USER_AGENT, Download, DownloadError, RateLimiter
 
 log = logging.getLogger(__name__)
 
+QUEUE = "downloads"
+LOOK_AGAIN = 5  # seconds between looks at the queue, for changes made from outside
 PERSIST_SECONDS = 5
 PROGRESS_SECONDS = 1
 FREE_SPACE_MARGIN = 1024**3
@@ -48,8 +53,10 @@ class DownloadManager:
         scanner: Scanner,
         pool: ArchivePool,
         data_dir: Path,
+        broker: LocalBroker | None = None,
     ):
         self.db = db
+        self.broker = broker or LocalBroker(db)
         self.events = events
         self.scanner = scanner
         self.pool = pool
@@ -191,12 +198,33 @@ class DownloadManager:
         self._changed()
 
     def move(self, download_id: int, to_top: bool) -> None:
-        edge = self.db.scalar(f"SELECT {'MIN' if to_top else 'MAX'}(position) FROM downloads") or 0
-        self.db.execute(
-            "UPDATE downloads SET position = ? WHERE id = ?",
-            (edge - 1 if to_top else edge + 1, download_id),
-        )
+        self.place(download_id, "top" if to_top else "bottom")
+
+    def waiting(self) -> "list[tuple[int, float]]":
+        """The downloads waiting to start, in the order they will."""
+        rows = self.db.all("SELECT id, position FROM downloads WHERE state = 'queued'")
+        return self.broker.waiting(QUEUE, [(row["id"], row["position"]) for row in rows])
+
+    def place(self, download_id: int, where: str) -> None:
+        """Move a waiting download to the top or bottom, or one place up or down."""
+        score = new_place(self.waiting(), download_id, where)
+        if score is None:
+            return
+        self.db.execute("UPDATE downloads SET position = ? WHERE id = ?", (score, download_id))
+        self.broker.place(QUEUE, download_id, score)
         self._changed()
+
+    def retry_failed(self) -> int:
+        rows = self.db.all("SELECT id FROM downloads WHERE state = 'failed'")
+        for row in rows:
+            self.resume(row["id"])
+        return len(rows)
+
+    def cancel_waiting(self) -> int:
+        rows = self.db.all("SELECT id FROM downloads WHERE state IN ('queued', 'paused')")
+        for row in rows:
+            self.cancel(row["id"])
+        return len(rows)
 
     # -- internals --------------------------------------------------------
 
@@ -206,8 +234,11 @@ class DownloadManager:
 
     def _set_state(self, download_id: int, state: str, error: str | None = None) -> None:
         self.db.execute(
-            "UPDATE downloads SET state = ?, error = ?, updated = unixepoch() WHERE id = ?",
-            (state, error, download_id),
+            "UPDATE downloads SET state = ?, error = ?, updated = unixepoch(), "
+            "started = CASE WHEN ? = 'downloading' THEN unixepoch('subsec') ELSE started END, "
+            "finished = CASE WHEN ? IN ('done', 'failed', 'cancelled') THEN unixepoch('subsec') "
+            "ELSE finished END WHERE id = ?",
+            (state, error, state, state, download_id),
         )
 
     def _remove_part(self, filename: str) -> None:
@@ -220,19 +251,19 @@ class DownloadManager:
             settings = self.db.get_settings()
             self.limiter.rate = int(settings["bandwidth_limit_kbps"]) * 1024
             slots = int(settings["max_concurrent_downloads"]) - len(self._active)
-            if slots > 0:
-                queued = self.db.all(
-                    "SELECT id FROM downloads WHERE state = 'queued' ORDER BY position, id LIMIT ?",
-                    (slots,),
-                )
-                for row in queued:
-                    if row["id"] not in self._active:
-                        self._set_state(row["id"], "downloading")
-                        task = asyncio.create_task(self._run_one(row["id"]))
-                        self._active[row["id"]] = _Active(task)
-                if queued:
-                    self.events.publish("downloads", self.list())
-            await self._wake.wait()
+            started = False
+            if slots > 0 and not await asyncio.to_thread(self.broker.paused, QUEUE):
+                for download_id, _ in (await asyncio.to_thread(self.waiting))[:slots]:
+                    if download_id not in self._active:
+                        self._set_state(download_id, "downloading")
+                        task = asyncio.create_task(self._run_one(download_id))
+                        self._active[download_id] = _Active(task)
+                        started = True
+            if started:
+                self.events.publish("downloads", self.list())
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(LOOK_AGAIN):
+                    await self._wake.wait()
 
     async def _tick(self) -> None:
         """Publish live progress and persist it periodically."""
@@ -268,10 +299,15 @@ class DownloadManager:
         )
 
     async def _run_one(self, download_id: int) -> None:
+        with logs.job(f"download {download_id}"):
+            await self._download(download_id)
+
+    async def _download(self, download_id: int) -> None:
         active = self._active[download_id]
         row = self.db.one("SELECT * FROM downloads WHERE id = ?", (download_id,))
         assert row is not None
         download: Download | None = None
+        log.info("downloading %s", row["title"])
         try:
             link = await self._fetch_metalink(row["url"])
             filename = os.path.basename(link.name) or os.path.basename(row["url"]).removesuffix(
@@ -305,6 +341,7 @@ class DownloadManager:
             self.events.publish("downloads", self.list())
             await asyncio.to_thread(self._install, row, download)
             self._set_state(download_id, "done")
+            log.info("downloaded %s (%.1f MB)", row["title"], link.size / 1024**2)
             self._history(row, link.size, "updated" if row["replaces"] else "added")
             self.events.publish("library", {"changed": True})
         except asyncio.CancelledError:
@@ -314,6 +351,7 @@ class DownloadManager:
                     (download.bitmap.to_bytes(), download.bytes_done, download_id),
                 )
             self._set_state(download_id, active.stop_state)
+            log.info("download of %s %s", row["title"], active.stop_state)
             if active.stop_state == "cancelled" and download is not None:
                 download.part.unlink(missing_ok=True)
         except Exception as exc:

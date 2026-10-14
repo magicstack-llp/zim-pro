@@ -5,8 +5,10 @@ service it is, because the extras differ: how a model is told to search the web,
 it reports the pages it used, and how it turns text into audio.
 """
 
+import asyncio
 import base64
 import json
+import logging
 import re
 import struct
 import time
@@ -19,6 +21,9 @@ from urllib.parse import urlsplit
 import httpx
 
 from .db import Database
+from .monitor import metrics
+
+log = logging.getLogger(__name__)
 
 KINDS = (
     "openai", "gemini", "perplexity", "openrouter", "groq", "ollama", "lmstudio", "llamacpp",
@@ -397,6 +402,29 @@ async def stream_chat(
     provider: Provider, model: str, messages: list[dict[str, str]], web: bool = False
 ) -> AsyncIterator[Event]:
     """Stream a chat reply. With ``web`` the model is asked to search the internet itself."""
+    started = time.monotonic()
+    ok = False
+    log.info("asking %s (%s)%s", provider.name, model, ", with web search" if web else "")
+    try:
+        async for event in _stream_chat(provider, model, messages, web):
+            yield event
+        ok = True
+    except (GeneratorExit, asyncio.CancelledError):
+        ok = True  # the reader stopped listening: not the provider's failure
+        raise
+    except AIError as exc:
+        log.warning("%s (%s) failed: %s", provider.name, model, exc)
+        raise
+    finally:
+        seconds = time.monotonic() - started
+        metrics.ai_call(provider.name, ok, seconds)
+        if ok:
+            log.info("%s (%s) answered in %.1f s", provider.name, model, seconds)
+
+
+async def _stream_chat(
+    provider: Provider, model: str, messages: list[dict[str, str]], web: bool
+) -> AsyncIterator[Event]:
     if not model:
         raise AIError("No model is chosen. Pick one in the chat box or under Settings.")
     if web and provider.kind == "gemini":

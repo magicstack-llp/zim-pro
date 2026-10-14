@@ -15,6 +15,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   service in the compose files. The captcha solver inside the VPN waits until the VPN is
   healthy, and so does Zim Pro when all of its traffic goes through the VPN.
 
+- **Queues** in Settings: downloads, builds and feed syncs side by side, with what is
+  running (and when it last moved), what is waiting in order, what is held and what
+  failed. Pause and resume a queue, change how many run at once, move a waiting job up,
+  down, to the top or the bottom, retry all failed and cancel all waiting. A day's
+  figures: done, failed, average wait and run time, 95th percentile, and an hourly chart.
+- **Redis**, optional (`KIWIX_REDIS_URL`): the order of each queue and whether it is
+  paused are kept in Redis, where other tools can see and change them, and the logs are
+  streamed to it. The database keeps every job's record, so the queues carry on without
+  Redis and fill it again when it is back. `docker/compose.redis.yml` runs both, and
+  `compose.full.yml` now includes Redis.
+- **Monitoring** in Settings: health checks (disk space, database, responsiveness,
+  memory, Redis, VPN, captcha solver, catalog, stuck jobs, failures, errors) and charts of
+  the last hour or day for CPU, memory, responsiveness, requests, fetches, download speed,
+  jobs and errors, with tables of requests by part of the API, the sites fetched from and
+  the AI providers. A job that has not moved for ten minutes is flagged and logged.
+- **Logs** in Settings: every line from every part of the server in one list, with the
+  part and the job it belongs to; filter by level, part, job or text, follow it live, and
+  download it. Kept in `logs/zim-pro.log` in the state folder and read back after a
+  restart. Secrets are blanked out. Each failed or slow request is logged, and each MCP
+  tool call, AI answer, settings change and queue change.
+
 ### Changed
 
 - **Import OPML** shows what the file holds before anything is added: its folders and
@@ -26,6 +47,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - In the first minute after the machine starts, an automatic change of VPN address was
   refused as "too soon after the last one", and the VPN's state could show as empty.
+- Feed syncs and link builds could stop for good after the VPN changed its address. Each
+  change dropped the connections open through the proxy, the HTTP library kept them as in
+  use, and once all were kept no request could be sent. A new set of connections is now
+  started after each change of address, and whenever the old set runs dry.
+- Every fetch of a feed, page or file now has a deadline: the answer must start within
+  a minute, and arrive in full at no less than 50 KB/s on average (at least two minutes).
+  A site that never finishes answering fails that one page instead of holding up the
+  build. Checking a feed address gives up after 30 seconds per address.
+- Checking a feed address used the proxy even when it was switched off in Settings.
 
 ## [0.4.0] - 2026-10-13
 

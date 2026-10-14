@@ -8,6 +8,9 @@ import { useData, useLive } from "../lib/live";
 import { SolverStatus, SolverTest, VpnStatus, VpnTest } from "../Network";
 import { ErrorNote, Switch } from "../ui";
 import { Field, ModelPicker, PICKER, playSample, Providers, Segmented } from "./AiSettings";
+import Logs from "./Logs";
+import Monitor from "./Monitor";
+import Queues from "./Queues";
 import { About, McpAccess, SettingsNav, TAB_OF, type TabId } from "./SettingsParts";
 
 interface SettingsData {
@@ -49,6 +52,7 @@ interface SettingsData {
   tts_provider: string;
   tts_model: string;
   tts_voice: string;
+  log_level: string;
 }
 
 const SEARCH_SERVICES: Option[] = [
@@ -183,6 +187,16 @@ export default function Settings() {
     } catch (reason) {
       setProblem(String((reason as Error).message));
     }
+  };
+  // Sections that change a setting themselves (a queue's limit, the log level): take the new
+  // value into the form, so that Save does not put the old one back.
+  const adopt = (patch: Partial<SettingsData>) => {
+    setForm((current) => current && { ...current, ...patch });
+    setSaved((current) => (current ? JSON.stringify({ ...JSON.parse(current), ...patch }) : current));
+  };
+  const keepLogLevel = async (level: string) => {
+    await api("/api/settings", { method: "PUT", body: JSON.stringify({ log_level: level }) });
+    adopt({ log_level: level });
   };
   const dirty = !!form && JSON.stringify(form) !== saved;
 
@@ -494,6 +508,9 @@ export default function Settings() {
               </section>
               </>
             )}
+            {tab === "queues" && <Queues onSetting={adopt} />}
+            {tab === "monitoring" && <Monitor />}
+            {tab === "logs" && <Logs onKeepLevel={keepLogLevel} />}
             {tab === "about" && <About />}
           </div>
         </div>

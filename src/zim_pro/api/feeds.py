@@ -1,5 +1,6 @@
 """Feeds: collections of RSS and Atom addresses, each kept as one ZIM that stays current."""
 
+import asyncio
 from typing import Any
 
 import httpx
@@ -19,6 +20,7 @@ from .organise import use_category
 router = APIRouter(prefix="/api/feeds", dependencies=[Depends(require_admin)])
 
 ITEM_STATES = ("saved", "new", "failed", "skipped", "dropped")
+LOOK_TIMEOUT = 30  # seconds one address may take to answer in full, when checking it
 
 
 class FeedBody(BaseModel):
@@ -224,7 +226,11 @@ class CheckBody(BaseModel):
 
 
 async def _look(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
-    reply = await client.get(url)
+    try:
+        async with asyncio.timeout(LOOK_TIMEOUT):
+            reply = await client.get(url)
+    except TimeoutError:
+        raise HTTPException(422, f"{url} did not answer within {LOOK_TIMEOUT} seconds") from None
     if reply.status_code >= 400:
         raise HTTPException(422, f"{url} answered HTTP {reply.status_code}")
     kind = reply.headers.get("content-type", "")
@@ -247,7 +253,7 @@ async def _look(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
 async def check(body: CheckBody, ctx: Context = Depends(get_context)) -> dict[str, Any]:
     """Look at an address: is it a feed, or a page that says where its feeds are?"""
     url = "".join(clean_addresses(body.url, "feed")[:1])
-    proxy = str(ctx.db.get_setting("build_proxy")) or None
+    proxy = ctx.network.proxy or None
     try:
         async with httpx.AsyncClient(
             headers={"User-Agent": USER_AGENT}, follow_redirects=True, timeout=20, proxy=proxy

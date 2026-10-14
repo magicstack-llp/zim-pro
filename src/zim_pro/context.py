@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import HTTPException, Request
 from libzim.reader import Archive
@@ -13,6 +13,10 @@ from .feeds.manager import FeedManager
 from .library.archive_pool import ArchivePool
 from .library.scanner import Scanner
 from .network import Network
+from .queues import LocalBroker
+
+if TYPE_CHECKING:
+    from .monitor import Monitor
 
 
 @dataclass
@@ -28,6 +32,8 @@ class Context:
     builds: BuildManager
     feeds: FeedManager
     network: Network
+    broker: LocalBroker
+    monitor: "Monitor | None" = None
 
     def book(self, book_id: str) -> dict[str, Any] | None:
         return self.db.one("SELECT * FROM books WHERE id = ? AND error IS NULL", (book_id,))

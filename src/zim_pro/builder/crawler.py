@@ -30,6 +30,7 @@ import httpx
 
 from ..downloads.engine import USER_AGENT
 from ..feeds import parse as feed_parse
+from ..monitor import metrics
 from . import extract, icons, sitemap
 from .report import Cancelled, Reporter
 from .writer import BuildError, Stage, ZimMeta, language_code, slugify
@@ -124,6 +125,13 @@ _CHALLENGE_MARKS = (
     b"enable javascript and cookies to continue",
 )
 SOLVER_TIMEOUT = 90  # seconds a solver may take over one page
+# Every request ends, whatever holds it up: the answer must start within REQUEST_TIMEOUT,
+# and the whole of it arrive within ``max(2 * REQUEST_TIMEOUT, limit / MIN_SPEED)``.
+REQUEST_TIMEOUT = 60
+MIN_SPEED = 50 * 1024  # bytes a second, on average
+# Never more requests are sent at once than the client has connections, so waiting this long
+# for one means the pool lost some of them (see Fetcher._renew_client).
+POOL_TIMEOUT = 10
 
 
 class _SlowDown(Exception):
@@ -198,21 +206,37 @@ class Fetcher:
         self._slots = asyncio.Semaphore(max(1, workers))
         self._hosts: dict[str, asyncio.Lock] = {}
         self._last: dict[str, float] = {}
-        self.client = httpx.AsyncClient(
-            headers={"User-Agent": USER_AGENT, "Accept-Language": "en,*;q=0.5"},
-            follow_redirects=True,
-            timeout=httpx.Timeout(30, connect=15),
-            limits=httpx.Limits(max_connections=max(4, workers * 2)),
-            transport=transport,
-            proxy=proxy or None,
-        )
+        self._client_options: dict[str, Any] = {
+            "headers": {"User-Agent": USER_AGENT, "Accept-Language": "en,*;q=0.5"},
+            "follow_redirects": True,
+            "timeout": httpx.Timeout(30, connect=15, pool=POOL_TIMEOUT),
+            "limits": httpx.Limits(max_connections=max(4, workers * 2)),
+            "transport": transport,
+            "proxy": proxy or None,
+        }
+        self.client = httpx.AsyncClient(**self._client_options)
+        self._retired: list[httpx.AsyncClient] = []
         self.downloaded = 0
         self.reused = 0
 
     async def close(self) -> None:
-        await self.client.aclose()
+        for client in [self.client, *self._retired]:
+            await client.aclose()
         await self._solver_client.aclose()
         self._index_file.write_text(json.dumps(self._index))
+
+    def _renew_client(self) -> None:
+        """Go on with a new connection pool, keeping the cookies.
+
+        httpcore keeps a connection through a proxy for good when the TLS handshake inside
+        it fails, as it does while the VPN reconnects; a request cut short can do the same.
+        Once every connection is kept so, each request only waits for one. Requests still
+        running on the old pool finish on it; it is closed with the fetcher.
+        """
+        old = self.client
+        self.client = httpx.AsyncClient(**self._client_options)
+        self.client.cookies = old.cookies
+        self._retired.append(old)
 
     def set_pace(self, host: str, seconds: float) -> None:
         """Never ask ``host`` more often than this (its Crawl-delay).
@@ -277,6 +301,7 @@ class Fetcher:
             self._delay[host] = self._base[host]
         self._agents.clear()
         self.client.cookies.clear()
+        self._renew_client()  # the connections made through the old address are dead
         self.address_changes += 1
         if self._on_new_address:
             self._on_new_address(host)
@@ -344,6 +369,19 @@ class Fetcher:
 
         ``fresh`` asks the site even when :attr:`prefer_cache` would use the copy at hand.
         """
+        started = time.monotonic()
+        host = urlsplit(url).netloc
+        try:
+            fetched = await self._get(url, limit, fresh)
+        except FetchError as exc:
+            metrics.fetched(host, False, 0, time.monotonic() - started, str(exc))
+            log.debug("could not fetch %s: %s", url, exc)
+            raise
+        size = 0 if fetched.cached else fetched.file.stat().st_size
+        metrics.fetched(host, True, size, time.monotonic() - started)
+        return fetched
+
+    async def _get(self, url: str, limit: int, fresh: bool) -> Fetched:
         file = self.cache_file(url)
         known = self._index.get(url) if file.exists() else None
         if known and self.prefer_cache and not fresh:
@@ -370,7 +408,10 @@ class Fetcher:
                 if host in self._agents:
                     headers["User-Agent"] = self._agents[host]
                 try:
-                    async with self.client.stream("GET", url, headers=headers) as reply:
+                    async with (
+                        asyncio.timeout(REQUEST_TIMEOUT) as deadline,
+                        self.client.stream("GET", url, headers=headers) as reply,
+                    ):
                         if await self._challenged(reply):
                             raise _Challenge
                         if reply.status_code == 304 and known:
@@ -390,6 +431,10 @@ class Fetcher:
                         declared = int(reply.headers.get("content-length") or 0)
                         if declared > limit:
                             raise FetchError(f"larger than {limit // MB} MB")
+                        deadline.reschedule(
+                            asyncio.get_running_loop().time()
+                            + max(2 * REQUEST_TIMEOUT, limit / MIN_SPEED)
+                        )
                         size = 0
                         partial = file.with_suffix(".part")
                         with partial.open("wb") as out:
@@ -449,6 +494,14 @@ class Fetcher:
                 except FetchError:
                     file.with_suffix(".part").unlink(missing_ok=True)
                     raise
+                except TimeoutError:
+                    # Cut short by the deadline: the connection it held may be lost to the pool.
+                    file.with_suffix(".part").unlink(missing_ok=True)
+                    self._renew_client()
+                    last_error = "the site did not answer in time"
+                except httpx.PoolTimeout:
+                    self._renew_client()
+                    last_error = "no connection could be had"
                 except (httpx.HTTPError, OSError) as exc:
                     file.with_suffix(".part").unlink(missing_ok=True)
                     last_error = (

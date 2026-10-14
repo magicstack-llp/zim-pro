@@ -30,7 +30,11 @@ def main() -> None:
 
     from .main import create_app
 
-    logging.basicConfig(
-        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    # Logging is set up by the app itself (see logs.py): every line also reaches Settings.
+    uvicorn.run(
+        create_app(config),
+        host=config.host,
+        port=config.port,
+        log_config=None,
+        access_log=False,
     )
-    uvicorn.run(create_app(config), host=config.host, port=config.port, log_level="info")

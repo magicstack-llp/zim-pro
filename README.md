@@ -153,7 +153,8 @@ values in one `.env` file. Copy the folder, pick a file, and start it:
 | [`compose.vpn-external.yml`](docker/compose.vpn-external.yml) | Uses a Gluetun you already run elsewhere |
 | [`compose.vpn-all.yml`](docker/compose.vpn-all.yml) | All of Zim Pro's traffic through the VPN |
 | [`compose.zimit.yml`](docker/compose.zimit.yml) | + browser capture (Zimit) |
-| [`compose.full.yml`](docker/compose.full.yml) | VPN, solver and browser capture together |
+| [`compose.redis.yml`](docker/compose.redis.yml) | + Redis for the queues and a stream of the logs |
+| [`compose.full.yml`](docker/compose.full.yml) | VPN, solver, browser capture and Redis together |
 
 ```sh
 cd docker
@@ -346,6 +347,7 @@ For UI work, run `npm run dev` in `web/` (set `KIWIX_BACKEND` if the server is n
 | `KIWIX_HOST` / `KIWIX_PORT` | `0.0.0.0` / `8080` | Listen address |
 | `KIWIX_ADMIN_TOKEN` | unset | If set, changes need `Authorization: Bearer <token>`, and `/mcp` needs the token or an API key made in Settings |
 | `KIWIX_CATALOG_URL` | Kiwix OPDS feed | Catalog to check for updates |
+| `KIWIX_REDIS_URL` | unset | A Redis server for the queues and a copy of the logs, such as `redis://redis:6379/0`; without it the queues are kept in the database |
 
 Download limits, the update schedule and policies are set in the web UI under Settings.
 
@@ -647,6 +649,45 @@ question while the Internet button in the chat box is on. Either:
 
 **Read aloud** adds a listen button to answers, using the browser's built-in voice or a
 provider's speech model (OpenAI, Gemini, Groq, or a local `/audio/speech` server).
+
+## Queues, monitoring and logs
+
+Settings has three sections for seeing what the server is doing, and changing it.
+
+**Queues** shows downloads, builds and feed syncs side by side. For each: what is running
+(progress, how long, and when it last moved), what is waiting and in which order, what is
+held, and what failed in the last day with the reason. You can pause and resume a whole
+queue (running jobs finish, nothing new starts), change how many run at once, move a
+waiting job to the top or bottom or one place up or down, retry everything that failed,
+and cancel everything waiting. Figures for the last day: jobs done and failed, the average
+wait and run time, how long 95% took, and an hour-by-hour chart.
+
+The queues work with nothing more than the database. With `KIWIX_REDIS_URL` set, the order
+of each queue and whether it is paused are kept in Redis instead: a sorted set
+`zimpro:queue:<name>` (`downloads`, `builds`, `feeds`; the lowest score starts first) and a
+key `zimpro:queue:<name>:paused`, which you can read and change with `redis-cli` or any
+other tool; Zim Pro follows within five seconds. The database still keeps the record of
+every job, so if Redis stops the queues carry on from it, and Redis is filled again when
+it is back. [`docker/compose.redis.yml`](docker/compose.redis.yml) runs the two together.
+
+**Monitoring** runs health checks (free disk space for the library and the state folder,
+the database, how promptly the server answers, memory, Redis, the VPN, the captcha solver,
+the catalog, jobs that have stopped moving, recent failures and errors) and charts the last
+hour or day: CPU and memory of Zim Pro and the machine, responsiveness, requests to the
+server, pages and files fetched, download speed, jobs, and errors logged. Tables show each
+part of the API (requests, failures, average and 95th-percentile time), the sites builds
+and feeds fetch from (with the last problem each one gave), and the AI providers. A job
+that has not moved for ten minutes is flagged there and in the logs.
+
+**Logs** gathers every line from every part of the server in one list: downloads, builds,
+feeds, the network, AI, MCP, the queues, requests that failed or were slow, and the server
+itself. Each line says which part wrote it and, when it was written for a job, which one
+(`feed 12`, `download 3`): click the job to follow just it. Filter by level, part, job or
+text; the list updates live. Lines are written to `logs/zim-pro.log` in the state folder
+(five files of 5 MB are kept, one JSON object per line), read back after a restart, sent to
+the Redis stream `zimpro:logs` when Redis is used, and can be downloaded. Keys, tokens and
+passwords are blanked out before a line is kept. Choose how much is kept: errors only up to
+every web request.
 
 ## MCP
 

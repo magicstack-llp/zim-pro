@@ -1,6 +1,7 @@
 """MCP server: lets LLM apps search and read the local ZIM library."""
 
 import asyncio
+import logging
 from typing import Any
 
 from mcp.server.mcpserver import MCPServer
@@ -17,6 +18,14 @@ Offline knowledge library served from local ZIM archives (Wikipedia, Stack Excha
 documentation sets and more). Call list_books to see what is available, search to find \
 articles, then get_article to read one. Paths returned by search are passed to get_article \
 unchanged."""
+
+log = logging.getLogger(__name__)
+
+
+def _called(tool: str, args: dict[str, Any]) -> None:
+    """Note an LLM app's call in the logs."""
+    shown = ", ".join(f"{key}={value!r}" for key, value in args.items() if value not in ("", 0))
+    log.info("MCP %s(%s)", tool, shown[:300])
 
 
 def build_mcp(ctx: Context) -> MCPServer:
@@ -42,6 +51,7 @@ def build_mcp(ctx: Context) -> MCPServer:
             query: optional text to filter by, matched against id, title and description.
             language: optional ISO 639-3 code such as "eng".
         """
+        _called("list_books", locals())
         like = f"%{query}%"
         rows = ctx.db.all(
             "SELECT * FROM books WHERE error IS NULL "
@@ -77,6 +87,7 @@ def build_mcp(ctx: Context) -> MCPServer:
             book: a book id from list_books, or empty to search all books.
             limit: maximum results (or books, when searching all of them).
         """
+        _called("search", locals())
         try:
             return await asyncio.to_thread(_search, query, book, max(1, min(limit, 50)))
         except LookupError as exc:
@@ -85,6 +96,7 @@ def build_mcp(ctx: Context) -> MCPServer:
     @mcp.tool()
     async def suggest(book: str, prefix: str, limit: int = 10) -> list[dict[str, str]]:
         """Find articles in a book whose title starts with or contains the given text."""
+        _called("suggest", locals())
         try:
             _, archive = ctx.archive(book)
         except LookupError as exc:
@@ -114,6 +126,7 @@ def build_mcp(ctx: Context) -> MCPServer:
             offset: character position to start from.
             max_chars: maximum characters to return.
         """
+        _called("get_article", locals())
 
         def work() -> str:
             article = _article(book, path)
@@ -137,6 +150,7 @@ def build_mcp(ctx: Context) -> MCPServer:
     @mcp.tool()
     async def get_article_outline(book: str, path: str = "") -> dict[str, Any]:
         """List an article's headings and the other articles it links to."""
+        _called("get_article_outline", locals())
 
         def work() -> dict[str, Any]:
             article = _article(book, path)
@@ -150,6 +164,7 @@ def build_mcp(ctx: Context) -> MCPServer:
     @mcp.tool()
     async def list_updates() -> list[dict[str, Any]]:
         """List books that have a newer release available in the Kiwix catalog."""
+        _called("list_updates", locals())
         return [
             {
                 "book": item["book"]["id"],
@@ -166,6 +181,7 @@ def build_mcp(ctx: Context) -> MCPServer:
     @mcp.tool()
     async def start_update(book: str) -> str:
         """Start downloading the newest release of a book. Disabled unless enabled in settings."""
+        _called("start_update", locals())
         if not ctx.db.get_setting("mcp_allow_writes"):
             return "Updates over MCP are turned off. Enable 'mcp_allow_writes' in the web UI."
         for item in book_updates(ctx.db):

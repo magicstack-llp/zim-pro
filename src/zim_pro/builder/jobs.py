@@ -8,6 +8,7 @@ on its own threads, and one thread writes the file.
 """
 
 import asyncio
+import contextlib
 import json
 import logging
 import shutil
@@ -17,11 +18,13 @@ from typing import Any
 
 from libzim.reader import Archive
 
+from .. import logs
 from ..db import Database
 from ..events import EventBus
 from ..library.archive_pool import ArchivePool
 from ..library.naming import split_filename
 from ..library.scanner import Scanner, file_under_categories
+from ..queues import LocalBroker, new_place
 from . import icons, zimit
 from .convert import epub, mobi, pdf
 from .crawler import Crawler, CrawlOptions, NothingNew
@@ -31,10 +34,11 @@ from .writer import BuildError, Stage, ZimMeta, slugify, write_zim
 log = logging.getLogger(__name__)
 
 TICK_SECONDS = 1
+LOOK_AGAIN = 5  # seconds between looks at the queue, for changes made from outside
 FREE_SPACE_MARGIN = 512 * 1024 * 1024
 LIST_COLUMNS = (
     "id, kind, source_id, title, state, phase, done, total, failed, skipped, size, error, "
-    "report, params, book_id, created, started, finished"
+    "report, params, book_id, position, created, started, finished"
 )
 # Steps that cannot be held half-way, and what to tell someone who tries.
 UNPAUSABLE = {
@@ -62,7 +66,8 @@ class BuildManager:
     """A queue of builds of some kinds. Each queue has its own workers and its own limit."""
 
     KINDS: tuple[str, ...] = ("link", "upload")
-    EVENT = "builds"  # the name its progress is published under
+    EVENT = "builds"  # the name its progress is published under, and its queue's name
+    JOB = "build"  # what its jobs are called in the logs
     SLOTS = "max_concurrent_builds"  # the setting that says how many run at once
     WORK = "builds"  # its folder under the state directory
     KEEP_FINISHED = 0  # finished builds kept in the list; 0 keeps them until cleared
@@ -75,8 +80,10 @@ class BuildManager:
         pool: ArchivePool,
         data_dir: Path,
         state_dir: Path,
+        broker: LocalBroker | None = None,
     ):
         self.db = db
+        self.broker = broker or LocalBroker(db)
         self.events = events
         self.scanner = scanner
         self.pool = pool
@@ -208,7 +215,8 @@ class BuildManager:
     def retry(self, build_id: int) -> None:
         self.db.execute(
             "UPDATE builds SET state = 'queued', phase = '', done = 0, total = 0, failed = 0, "
-            "skipped = 0, error = NULL, log = '[]', started = NULL, finished = NULL "
+            "skipped = 0, error = NULL, log = '[]', started = NULL, finished = NULL, "
+            "position = (SELECT MAX(COALESCE(position, id)) + 1 FROM builds) "
             "WHERE id = ? AND state IN ('failed', 'cancelled', 'finished')",
             (build_id,),
         )
@@ -240,26 +248,57 @@ class BuildManager:
             # A paused build gives its place to the next one in the queue.
             running = sum(not a.reporter.paused.is_set() for a in self._active.values())
             slots = int(self.db.get_setting(self.SLOTS)) - running
-            if slots > 0:
-                queued = self.db.all(
-                    f"SELECT id FROM builds WHERE state = 'queued' AND {self._mine} "
-                    "ORDER BY id LIMIT ?",
-                    (slots,),
-                )
-                for row in queued:
-                    if row["id"] in self._active:
+            started = False
+            if slots > 0 and not await asyncio.to_thread(self.broker.paused, self.EVENT):
+                for build_id, _ in (await asyncio.to_thread(self.waiting))[:slots]:
+                    if build_id in self._active:
                         continue
                     self.db.execute(
                         "UPDATE builds SET state = 'processing', started = unixepoch('subsec') "
                         "WHERE id = ?",
-                        (row["id"],),
+                        (build_id,),
                     )
                     reporter = Reporter()
-                    task = asyncio.create_task(self._run_one(row["id"], reporter))
-                    self._active[row["id"]] = _Active(task, reporter)
-                if queued:
-                    self.events.publish(self.EVENT, self.list())
-            await self._wake.wait()
+                    task = asyncio.create_task(self._run_one(build_id, reporter))
+                    self._active[build_id] = _Active(task, reporter)
+                    started = True
+            if started:
+                self.events.publish(self.EVENT, self.list())
+            with contextlib.suppress(TimeoutError):
+                async with asyncio.timeout(LOOK_AGAIN):
+                    await self._wake.wait()
+
+    def waiting(self) -> "list[tuple[int, float]]":
+        """The builds waiting to start, in the order they will."""
+        rows = self.db.all(
+            f"SELECT id, COALESCE(position, id) AS place FROM builds "
+            f"WHERE state = 'queued' AND {self._mine}"
+        )
+        return self.broker.waiting(self.EVENT, [(row["id"], row["place"]) for row in rows])
+
+    def place(self, build_id: int, where: str) -> None:
+        """Move a waiting build to the top or bottom, or one place up or down."""
+        score = new_place(self.waiting(), build_id, where)
+        if score is None:
+            return
+        self.db.execute("UPDATE builds SET position = ? WHERE id = ?", (score, build_id))
+        self.broker.place(self.EVENT, build_id, score)
+        self._changed()
+
+    def retry_failed(self) -> int:
+        rows = self.db.all(f"SELECT id FROM builds WHERE state = 'failed' AND {self._mine}")
+        for row in rows:
+            self.retry(row["id"])
+        return len(rows)
+
+    def cancel_waiting(self) -> int:
+        rows = self.db.all(
+            f"SELECT id FROM builds WHERE state IN ('queued', 'paused') AND {self._mine}"
+        )
+        for row in rows:
+            if row["id"] not in self._active:
+                self.cancel(row["id"])
+        return len(rows)
 
     async def _tick(self) -> None:
         """Publish live progress while anything is building."""
@@ -269,7 +308,12 @@ class BuildManager:
                 self.events.publish(self.EVENT, self.list())
 
     async def _run_one(self, build_id: int, reporter: Reporter) -> None:
+        with logs.job(f"{self.JOB} {build_id}"):
+            await self._run_build(build_id, reporter)
+
+    async def _run_build(self, build_id: int, reporter: Reporter) -> None:
         row = self.db.one("SELECT * FROM builds WHERE id = ?", (build_id,))
+        log.info("started %s", (row or {}).get("title") or build_id)
         stage = Stage(self.work_dir / "stage" / str(build_id))
         state, error, report, book_id = "finished", None, {}, ""
         try:
@@ -278,12 +322,23 @@ class BuildManager:
             book_id, report = await self._build(row, stage, reporter)
         except (Cancelled, asyncio.CancelledError):
             state = "cancelled"
+            log.info(
+                "cancelled" if not self._stopping else "stopped; it starts again with the server"
+            )
         except BuildError as exc:
             state, error = "failed", str(exc)
+            log.warning("failed: %s", exc)
         except Exception as exc:
             log.exception("build %s failed", build_id)
             state, error = "failed", f"Unexpected error: {exc or type(exc).__name__}"
         finally:
+            if state == "finished":
+                log.info(
+                    "finished: %s pages, %s failed, %.1f MB",
+                    report.get("pages", reporter.done),
+                    reporter.failed_count,
+                    (report.get("size") or 0) / 1024**2,
+                )
             stage.clear()
             self._active.pop(build_id, None)
             # When the server is going down the record is left alone: start() picks the

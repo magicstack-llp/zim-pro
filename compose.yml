@@ -1,6 +1,6 @@
 # Zim Pro: everything
 #
-# The VPN, the captcha solver and browser capture together. See compose.vpn.yml and
+# The VPN, the captcha solver, browser capture and Redis together. See compose.vpn.yml and
 # compose.zimit.yml for what each part is, and what the Docker socket means.
 #
 # Then, in Settings -> Network:
@@ -37,6 +37,7 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       KIWIX_ADMIN_TOKEN: ${ADMIN_TOKEN:-} # empty: no token asked for
+      KIWIX_REDIS_URL: redis://redis:6379/0 # the queues and a copy of the logs
     volumes:
       - ${ZIM_DIR:-./zims}:/data # your folder of .zim files
       - ${STATE_DIR:-./state}:/state # the database, uploads and pictures
@@ -45,7 +46,26 @@ services:
     group_add:
       - "${DOCKER_GID:-999}" # the docker group's gid: getent group docker
     depends_on:
-      - gluetun
+      gluetun:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+  # The queues of downloads, builds and feed syncs, and a stream of the logs. Zim Pro keeps
+  # its own record of every job, so this can be emptied or left out without losing any.
+  redis:
+    image: redis:7-alpine
+    container_name: zim-pro-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 30s
+      timeout: 5s
+      start_period: 10s
+      retries: 3
+    volumes:
+      - redis-data:/data
 
   gluetun:
     image: qmcgaw/gluetun:latest
@@ -91,3 +111,6 @@ services:
     environment:
       LOG_LEVEL: info
       TZ: ${TZ:-Etc/UTC}
+
+volumes:
+  redis-data:

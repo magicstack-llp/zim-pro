@@ -15,6 +15,9 @@ class Config(BaseSettings):
     admin_token: str | None = None
     catalog_url: str = "https://library.kiwix.org/catalog/v2/entries"
     web_dir: Path | None = None
+    # A Redis server to hold the queues of downloads, builds and feed syncs, and a copy of
+    # the logs; without one, the queues are kept in the database as before.
+    redis_url: str | None = None
 
     @property
     def db_path(self) -> Path:
@@ -76,6 +79,8 @@ DEFAULT_SETTINGS: dict[str, int | bool | str] = {
     "tts_provider": "",
     "tts_model": "",
     "tts_voice": "",
+    # The least a log line must be to be kept: DEBUG, INFO, WARNING or ERROR.
+    "log_level": "INFO",
 }
 
 POLICIES = ("auto", "notify", "pinned")

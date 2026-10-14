@@ -11,7 +11,8 @@ each is complete on its own.
 | [`compose.vpn-external.yml`](compose.vpn-external.yml) | Uses a Gluetun you already run elsewhere | `VPN_NETWORK` |
 | [`compose.vpn-all.yml`](compose.vpn-all.yml) | All of Zim Pro's traffic through the VPN | VPN details |
 | [`compose.zimit.yml`](compose.zimit.yml) | + browser capture (Zimit), with the Docker socket | `DOCKER_GID` |
-| [`compose.full.yml`](compose.full.yml) | VPN, solver and browser capture together | VPN details, `DOCKER_GID` |
+| [`compose.redis.yml`](compose.redis.yml) | + Redis for the queues and a stream of the logs | nothing |
+| [`compose.full.yml`](compose.full.yml) | VPN, solver, browser capture and Redis together | VPN details, `DOCKER_GID` |
 
 ## Use one
 

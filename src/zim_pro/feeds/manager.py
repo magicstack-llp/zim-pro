@@ -22,6 +22,7 @@ SCHEDULE_SECONDS = 30
 class FeedManager(BuildManager):
     KINDS = ("feed",)
     EVENT = "feeds"
+    JOB = "feed"
     SLOTS = "max_concurrent_feed_syncs"
     WORK = "feed-work"
     KEEP_FINISHED = 100
@@ -63,6 +64,7 @@ class FeedManager(BuildManager):
                 if self.db.get_setting("feed_auto_sync"):
                     for feed in self.due():
                         self.sync(feed["id"], trigger="schedule")
+                        log.info("queued the scheduled sync of %s", feed["title"] or feed["id"])
             except asyncio.CancelledError:
                 raise
             except Exception:

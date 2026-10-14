@@ -1,3 +1,4 @@
+import logging
 import shutil
 from pathlib import Path
 from typing import Any
@@ -6,10 +7,12 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from .. import logs
 from ..config import DEFAULT_SETTINGS, POLICIES
 from ..context import Context, get_context, require_admin
 from ..library import search as zim_search
 
+log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
 
 BOOK_COLUMNS = (
@@ -272,6 +275,13 @@ async def put_settings(
             clean[key] = max(low, min(high, clean[key]))
     if "catalog_refresh_hours" in clean:
         clean["catalog_refresh_hours"] = max(1, clean["catalog_refresh_hours"])
+    if "log_level" in clean:
+        clean["log_level"] = clean["log_level"].upper()
+        if clean["log_level"] not in ("DEBUG", "INFO", "WARNING", "ERROR"):
+            raise HTTPException(422, "log_level must be DEBUG, INFO, WARNING or ERROR")
+        logs.set_level(clean["log_level"])
+    changed = sorted(key for key in clean if key not in SECRET_SETTINGS)
+    log.info("settings changed: %s", ", ".join(changed) or "secrets only")
     ctx.db.set_settings(clean)
     ctx.network.forget()
     ctx.events.publish("network", {"settings": True})

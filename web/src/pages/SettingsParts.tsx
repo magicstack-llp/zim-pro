@@ -11,6 +11,9 @@ export const TABS = [
   { id: "ai", label: "AI", about: "Providers, Ask AI, web search, voice", icon: "M10 3l1.6 4.4L16 9l-4.4 1.6L10 15l-1.6-4.4L4 9l4.4-1.6zM15.5 13.5l.6 1.4 1.4.6-1.4.6-.6 1.4-.6-1.4-1.4-.6 1.4-.6z" },
   { id: "create", label: "Create and Feeds", about: "Builds, uploads, feed syncs", icon: "M10 4.5v11M4.5 10h11M4 4h12v12H4z" },
   { id: "network", label: "Network", about: "VPN and captcha solver", icon: "M10 17a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM3 10h14M10 3c2 2.2 3 4.5 3 7s-1 4.800-3 7c-2-2.200-3-4.500-3-7s1-4.800 3-7z" },
+  { id: "queues", label: "Queues", about: "Downloads, builds and feed syncs", icon: "M4 5h12M4 10h12M4 15h7M15 13v4M13 15h4" },
+  { id: "monitoring", label: "Monitoring", about: "Health, resources, traffic", icon: "M3 10h3l2-5 4 10 2-5h3" },
+  { id: "logs", label: "Logs", about: "Everything the server did", icon: "M5 3h7l3 3v11H5zM8 9h5M8 12h5M8 15h3" },
   { id: "mcp", label: "MCP", about: "Access for LLM apps, API keys", icon: "M8 6 4 10l4 4M12 6l4 4-4 4" },
   { id: "about", label: "About", about: "Version and links", icon: "M10 17a7 7 0 1 0 0-14 7 7 0 0 0 0 14zM10 9.500v4M10 6.700h.01" },
 ] as const;

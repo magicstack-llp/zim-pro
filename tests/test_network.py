@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from PIL import Image
 
 from zim_pro.builder import extract, icons
-from zim_pro.builder.crawler import Fetcher
+from zim_pro.builder.crawler import Fetcher, FetchError
 from zim_pro.catalog.updates import book_updates
 from zim_pro.config import Config
 from zim_pro.db import Database
@@ -177,6 +177,65 @@ async def test_without_the_switch_a_refusal_is_waited_for_as_before(tmp_path, qu
     finally:
         await fetcher.close()
     assert fetcher.slowed == 1 and fetcher.address_changes == 0 and gluetun.connection == 0
+
+
+async def test_connections_lost_through_the_proxy_do_not_stop_the_fetching(
+    tmp_path, quick, monkeypatch
+):
+    """While the VPN reconnects, the proxy lets a tunnel open and then drops it.
+
+    httpcore keeps every such connection for good; once all are kept, each request would
+    only wait for one. The fetcher starts a new pool and goes on.
+    """
+
+    async def proxy(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        head = await reader.readuntil(b"\r\n\r\n")
+        if head.startswith(b"CONNECT"):
+            writer.write(b"HTTP/1.1 200 Connection established\r\n\r\n")
+        else:
+            writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok")
+        await writer.drain()
+        writer.close()
+
+    monkeypatch.setattr("zim_pro.builder.crawler.POOL_TIMEOUT", 0.3)
+    server = await asyncio.start_server(proxy, "127.0.0.1", 0)
+    address = f"http://127.0.0.1:{server.sockets[0].getsockname()[1]}"
+    fetcher = Fetcher(tmp_path / "cache", 2, proxy=address)
+    try:
+        for n in range(4):  # as many tunnels as the pool holds connections
+            with pytest.raises(FetchError):
+                await fetcher.get(f"https://down.test/{n}", 1_000_000)
+        got = await asyncio.wait_for(fetcher.get("http://up.test/", 1_000_000), 10)
+    finally:
+        await fetcher.close()
+        server.close()
+    assert got.file.read_bytes() == b"ok"
+
+
+async def test_a_site_that_never_finishes_answering_is_given_up_on(tmp_path, monkeypatch):
+    async def trickle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        await reader.readuntil(b"\r\n\r\n")
+        writer.write(b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\n")
+        try:
+            while True:  # a byte now and then: never quiet long enough for a read timeout
+                writer.write(b"x")
+                await writer.drain()
+                await asyncio.sleep(0.05)
+        except (ConnectionError, OSError):
+            pass
+
+    monkeypatch.setattr("zim_pro.builder.crawler.REQUEST_TIMEOUT", 0.3)
+    monkeypatch.setattr("zim_pro.builder.crawler.MIN_SPEED", 10**9)
+    monkeypatch.setattr("zim_pro.builder.crawler.RETRIES", 0)
+    server = await asyncio.start_server(trickle, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    fetcher = Fetcher(tmp_path / "cache", 2)
+    try:
+        with pytest.raises(FetchError, match="in time"):
+            await asyncio.wait_for(fetcher.get(f"http://127.0.0.1:{port}/", 1_000_000), 10)
+    finally:
+        await fetcher.close()
+        server.close()
 
 
 # -- categories and pictures ------------------------------------------------------------

@@ -50,6 +50,7 @@ def _rebuild_due_links(ctx: Context) -> None:
     for link in due:
         try:
             ctx.builds.enqueue("link", link["id"], link["title"] or link["url"])
+            log.info("queued the scheduled rebuild of %s", link["url"])
         except Exception:
             log.exception("could not queue the rebuild of %s", link["url"])
 
@@ -92,6 +93,7 @@ async def run(ctx: Context) -> None:
                 last_scan = time.monotonic()
                 result = await asyncio.to_thread(ctx.scanner.scan)
                 if result["read"] or result["removed"]:
+                    log.info("library changed on disk: %s", result)
                     ctx.events.publish("library", {"changed": True})
         except asyncio.CancelledError:
             raise

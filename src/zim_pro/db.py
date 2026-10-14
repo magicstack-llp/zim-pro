@@ -319,6 +319,16 @@ class Database:
         build_columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(builds)")}
         if "params" not in build_columns:
             self._conn.execute("ALTER TABLE builds ADD COLUMN params TEXT NOT NULL DEFAULT '{}'")
+        # A place in the queue that can be changed (null: the order it was added in).
+        if "position" not in build_columns:
+            self._conn.execute("ALTER TABLE builds ADD COLUMN position REAL")
+        # When a download began and ended, for the time it waited and the time it took.
+        download_columns = {
+            row["name"] for row in self._conn.execute("PRAGMA table_info(downloads)")
+        }
+        for column in ("started", "finished"):
+            if column not in download_columns:
+                self._conn.execute(f"ALTER TABLE downloads ADD COLUMN {column} REAL")
         if "category" not in columns:
             self._conn.execute(
                 "ALTER TABLE books ADD COLUMN category TEXT NOT NULL DEFAULT 'other'"
