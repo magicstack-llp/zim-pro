@@ -265,32 +265,194 @@ function FeedDialog({ initial, onClose, onSaved }: { initial: Draft; onClose: ()
   );
 }
 
+interface OpmlFolder {
+  name: string;
+  /** A collection of this name exists: its feeds are added to it. */
+  exists: boolean;
+  feeds: { title: string; url: string; known: boolean }[];
+}
+
+/** "1 feed", "3 folders". */
+const many = (value: number, word: string) => `${count(value)} ${word}${value === 1 ? "" : "s"}`;
+
+/** Import from another feed reader: pick the file, see what is in it, choose what to bring in. */
 function OpmlDialog({ onClose, onDone }: { onClose: () => void; onDone: (message: string) => void }) {
   const [text, setText] = useState("");
+  const [fileName, setFileName] = useState("");
+  const [pasting, setPasting] = useState(false);
+  const [folders, setFolders] = useState<OpmlFolder[] | null>(null);
+  const [picked, setPicked] = useState<Set<number>>(new Set());
+  const [single, setSingle] = useState(false);
+  const [name, setName] = useState("Imported feeds");
+  const [category, setCategory] = useState("");
+  const [sync, setSync] = useState(true);
+  const [open, setOpen] = useState<number | null>(null);
+  const [dragging, setDragging] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
   const [working, setWorking] = useState(false);
-  const send = () => {
-    setWorking(true);
+  const read = (body: string) => {
+    setText(body);
     setProblem(null);
-    post<{ added: number; collections: number }>("/api/feeds/opml", { text })
-      .then((result) => onDone(`Added ${result.added} ${result.added === 1 ? "feed" : "feeds"} in ${result.collections} ${result.collections === 1 ? "collection" : "collections"}. Press Sync to fill them.`))
+    setWorking(true);
+    post<{ folders: OpmlFolder[] }>("/api/feeds/opml", { text: body, preview: true })
+      .then((result) => {
+        setFolders(result.folders);
+        setPicked(new Set(result.folders.map((_, index) => index)));
+      })
       .catch((reason) => setProblem(String(reason.message)))
       .finally(() => setWorking(false));
   };
+  const take = (file: File | undefined) => {
+    if (!file) return;
+    setFileName(file.name);
+    file.text().then(read);
+  };
+  const chosen = (folders ?? []).filter((_, index) => picked.has(index));
+  const feedCount = chosen.reduce((sum, folder) => sum + folder.feeds.length, 0);
+  const newCount = chosen.reduce((sum, folder) => sum + folder.feeds.filter((feed) => !feed.known).length, 0);
+  const send = () => {
+    setWorking(true);
+    setProblem(null);
+    post<{ added: number; collections: number; syncing: number }>("/api/feeds/opml", {
+      text,
+      folders: [...picked],
+      single: single ? name : "",
+      category,
+      sync,
+    })
+      .then((result) =>
+        onDone(
+          `Added ${many(result.added, "feed")} in ${many(result.collections, "collection")}.` +
+            (result.syncing ? ` Filling ${result.syncing === 1 ? "it" : "them"} now.` : " Press Sync to fill them."),
+        ),
+      )
+      .catch((reason) => setProblem(String(reason.message)))
+      .finally(() => setWorking(false));
+  };
+  const toggle = (index: number) =>
+    setPicked((current) => {
+      const next = new Set(current);
+      if (next.has(index)) next.delete(index);
+      else next.add(index);
+      return next;
+    });
   return (
     <Dialog
       title="Import feeds from OPML"
       onClose={onClose}
       footer={
-        <button className="btn btn-primary" onClick={send} disabled={working || !text.trim()}>
-          {working ? "Importing…" : "Import"}
-        </button>
+        folders ? (
+          <div className="flex flex-wrap justify-end gap-2">
+            <button className="btn" onClick={() => (setFolders(null), setText(""), setFileName(""))} disabled={working}>
+              Another file
+            </button>
+            <button className="btn btn-primary" onClick={send} disabled={working || !chosen.length || (single && !name.trim())}>
+              {working ? "Importing…" : `Import ${many(feedCount, "feed")}`}
+            </button>
+          </div>
+        ) : pasting ? (
+          <button className="btn btn-primary" onClick={() => read(text)} disabled={working || !text.trim()}>
+            {working ? "Reading…" : "Read"}
+          </button>
+        ) : null
       }
     >
       <ErrorNote message={problem} />
-      <p className="muted text-sm">OPML is the file other feed readers export. Each folder in it becomes one collection, and so one ZIM; feeds outside a folder go into "Imported feeds".</p>
-      <input className="mt-3 block w-full text-sm" type="file" accept=".opml,.xml,text/xml" onChange={(e) => e.target.files?.[0]?.text().then(setText)} aria-label="OPML file" />
-      <textarea className="input mt-3 h-40 font-mono text-xs" placeholder="<opml>…</opml>" value={text} onChange={(e) => setText(e.target.value)} aria-label="OPML text" />
+      {!folders && (
+        <>
+          <p className="muted text-sm">OPML is the file other feed readers (Feedly, Inoreader, NetNewsWire, Miniflux, Thunderbird…) export. Each folder in it becomes one collection, and so one ZIM.</p>
+          {pasting ? (
+            <textarea className="input mt-3 h-48 font-mono text-xs" placeholder="<opml>…</opml>" value={text} onChange={(e) => setText(e.target.value)} aria-label="OPML text" autoFocus />
+          ) : (
+            <label
+              className={`mt-3 flex cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed px-4 py-10 text-center transition ${
+                dragging ? "border-brand-500 bg-brand-50 dark:bg-brand-900/30" : "border-zinc-300 hover:border-zinc-400 dark:border-zinc-700 dark:hover:border-zinc-600"
+              }`}
+              onDragOver={(e) => (e.preventDefault(), setDragging(true))}
+              onDragLeave={() => setDragging(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setDragging(false);
+                take(e.dataTransfer.files[0]);
+              }}
+            >
+              <svg viewBox="0 0 24 24" className="muted h-8 w-8" fill="none" stroke="currentColor" strokeWidth={1.6} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M12 15V4m0 0L8 8m4-4 4 4M5 15v3a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2v-3" />
+              </svg>
+              <span className="text-sm font-medium">{working ? `Reading ${fileName}…` : "Drop an OPML file here, or choose one"}</span>
+              <span className="muted text-xs">.opml or .xml</span>
+              <input type="file" className="sr-only" accept=".opml,.xml,text/xml,text/x-opml,application/xml" onChange={(e) => take(e.target.files?.[0])} aria-label="OPML file" />
+            </label>
+          )}
+          <button type="button" className="text-brand-700 dark:text-brand-400 mt-2 text-sm hover:underline" onClick={() => setPasting(!pasting)}>
+            {pasting ? "Choose a file instead" : "Paste the text instead"}
+          </button>
+        </>
+      )}
+      {folders && (
+        <>
+          <p className="muted text-sm">
+            {fileName ? <span className="font-medium text-zinc-700 dark:text-zinc-200">{fileName}</span> : "The text"} lists {many(folders.reduce((sum, f) => sum + f.feeds.length, 0), "feed")} in {many(folders.length, "folder")}. Choose what to bring in.
+          </p>
+          <div className="mt-3 flex items-center justify-between text-xs">
+            <span className="muted">
+              {many(chosen.length, "folder")} chosen
+              {newCount < feedCount && `, ${feedCount - newCount} already here`}
+            </span>
+            <button type="button" className="text-brand-700 dark:text-brand-400 hover:underline" onClick={() => setPicked(picked.size === folders.length ? new Set() : new Set(folders.map((_, i) => i)))}>
+              {picked.size === folders.length ? "Choose none" : "Choose all"}
+            </button>
+          </div>
+          <ul className="mt-1.5 max-h-64 divide-y divide-zinc-100 overflow-y-auto rounded-xl border border-zinc-200 dark:divide-zinc-800 dark:border-zinc-800">
+            {folders.map((folder, index) => (
+              <li key={index}>
+                <div className="flex items-center gap-3 px-3 py-2">
+                  <input type="checkbox" className="h-4 w-4 accent-[var(--color-brand-600)]" checked={picked.has(index)} onChange={() => toggle(index)} aria-label={`Import ${folder.name}`} />
+                  <button type="button" className="min-w-0 flex-1 text-left" onClick={() => setOpen(open === index ? null : index)} aria-expanded={open === index}>
+                    <span className="block truncate text-sm font-medium">{folder.name}</span>
+                    <span className="muted block text-xs">
+                      {many(folder.feeds.length, "feed")}
+                      {folder.exists && !single && " · added to your collection of this name"}
+                    </span>
+                  </button>
+                  <svg viewBox="0 0 20 20" className={`muted h-4 w-4 shrink-0 transition ${open === index ? "rotate-90" : ""}`} fill="none" stroke="currentColor" strokeWidth={1.8} aria-hidden>
+                    <path d="M8 5l5 5-5 5" />
+                  </svg>
+                </div>
+                {open === index && (
+                  <ul className="space-y-1 px-10 pb-2.5">
+                    {folder.feeds.map((feed) => (
+                      <li key={feed.url} className="text-xs">
+                        <span className="block truncate">{feed.title || feed.url}</span>
+                        <span className="muted block truncate">
+                          {feed.url}
+                          {feed.known && " · already in a collection"}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </li>
+            ))}
+          </ul>
+          <div className="mt-3 divide-y divide-zinc-100 dark:divide-zinc-800">
+            <Row label="All in one collection" hint="One ZIM for every feed chosen, in place of one per folder.">
+              <Switch checked={single} onChange={setSingle} label="All in one collection" />
+            </Row>
+            {single && (
+              <Row label="Name of the collection">
+                <input className="input w-full sm:w-56" value={name} maxLength={200} onChange={(e) => setName(e.target.value)} aria-label="Name of the collection" />
+              </Row>
+            )}
+            <Row label="Category" hint="Where the ZIMs are filed in the Library.">
+              <CategorySelect value={category} onChange={setCategory} />
+            </Row>
+            <Row label="Sync now" hint="Fetch the articles straight away. Otherwise they are fetched on the usual schedule.">
+              <Switch checked={sync} onChange={setSync} label="Sync now" />
+            </Row>
+          </div>
+        </>
+      )}
     </Dialog>
   );
 }
@@ -434,7 +596,7 @@ function Collections({ runs, onProblem }: { runs: Build[]; onProblem: (message: 
         </p>
       )}
       {data && feeds.length === 0 && (
-        <Empty title="No feed collections yet">A collection is one or more RSS or Atom feeds kept as a single ZIM. New articles are added on a schedule, so the news, blogs and release notes you follow can be read, searched and asked about offline.</Empty>
+        <Empty title="No feed collections yet">A collection is one or more RSS or Atom feeds kept as a single ZIM. New articles are added on a schedule, so the news, blogs and release notes you follow can be read, searched and asked about offline. Coming from another feed reader? Use Import OPML.</Empty>
       )}
       <ul className="space-y-2">
         {feeds.map((feed) => {

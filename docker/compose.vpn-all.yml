@@ -20,6 +20,14 @@ services:
     image: ghcr.io/magicstack-llp/zim-pro:${ZIM_PRO_TAG:-latest}
     container_name: zim-pro
     restart: unless-stopped
+    healthcheck:
+      # The server answers and its database can be read. The first start scans the whole
+      # library before it answers, hence the long start_period.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=8)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 2m
+      retries: 3
     user: "${PUID:-1000}:${PGID:-1000}"
     environment:
       KIWIX_ADMIN_TOKEN: ${ADMIN_TOKEN:-}   # empty: no token asked for
@@ -28,12 +36,20 @@ services:
       - ${STATE_DIR:-./state}:/state        # the database, uploads and pictures
     network_mode: "service:gluetun"
     depends_on:
-      - gluetun
+      gluetun:
+        condition: service_healthy
 
   gluetun:
     image: qmcgaw/gluetun:latest
     container_name: gluetun
     restart: unless-stopped
+    healthcheck:
+      # Gluetun's own check: the VPN tunnel is up and reaches the internet.
+      test: ["CMD", "/gluetun-entrypoint", "healthcheck"]
+      interval: 30s
+      timeout: 10s
+      start_period: 1m
+      retries: 3
     cap_add:
       - NET_ADMIN
     devices:
@@ -59,9 +75,16 @@ services:
     image: ghcr.io/flaresolverr/flaresolverr:latest
     container_name: flaresolverr
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8191/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 1m
+      retries: 3
     network_mode: "service:gluetun"
     depends_on:
-      - gluetun
+      gluetun:
+        condition: service_healthy
     environment:
       LOG_LEVEL: info
       TZ: ${TZ:-Etc/UTC}

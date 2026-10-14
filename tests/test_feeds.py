@@ -477,3 +477,52 @@ async def test_a_links_feeds_add_new_articles_without_crawling_the_site_again(tm
         assert db.one("SELECT last_built FROM links")["last_built"] == built_at
     finally:
         await builds.stop()
+
+
+OPML = """<?xml version="1.0"?><opml version="2.0"><body>
+<outline text="Loose" xmlUrl="https://loose.test/rss"/>
+<outline text="Tech"><outline text="Knots" xmlUrl="https://knots.test/feed"/>
+  <outline text="Ropes" xmlUrl="https://ropes.test/feed"/></outline>
+<outline text="News"><outline text="Daily" xmlUrl="https://daily.test/atom"/></outline>
+</body></opml>"""
+
+
+@pytest.fixture
+def api(tmp_path):
+    from fastapi.testclient import TestClient
+
+    from zim_pro.config import Config
+    from zim_pro.main import create_app
+
+    return TestClient(create_app(Config(data_dir=tmp_path / "data", state_dir=tmp_path / "state")))
+
+
+def test_opml_preview_shows_folders_and_adds_nothing(api):
+    reply = api.post("/api/feeds/opml", json={"text": OPML, "preview": True}).json()
+    assert [(f["name"], len(f["feeds"])) for f in reply["folders"]] == [
+        ("Imported feeds", 1),
+        ("Tech", 2),
+        ("News", 1),
+    ]
+    assert api.get("/api/feeds").json()["feeds"] == []
+
+
+def test_opml_import_takes_the_chosen_folders_with_a_category(api):
+    reply = api.post(
+        "/api/feeds/opml", json={"text": OPML, "folders": [1, 2], "category": "Reading"}
+    ).json()
+    assert reply["added"] == 3 and reply["collections"] == 2 and reply["syncing"] == 0
+    feeds = {f["title"]: f for f in reply["feeds"]}
+    assert set(feeds) == {"Tech", "News"} and feeds["Tech"]["category"] == "Reading"
+    # Seen again, the feeds are known, and importing them twice adds nothing.
+    again = api.post("/api/feeds/opml", json={"text": OPML, "preview": True}).json()
+    assert [feed["known"] for feed in again["folders"][1]["feeds"]] == [True, True]
+    assert again["folders"][1]["exists"]
+    assert api.post("/api/feeds/opml", json={"text": OPML, "folders": [1]}).json()["added"] == 0
+
+
+def test_opml_import_can_put_everything_in_one_collection(api):
+    reply = api.post("/api/feeds/opml", json={"text": OPML, "single": "Everything"}).json()
+    assert [(f["title"], len(f["sources"])) for f in reply["feeds"]] == [("Everything", 4)]
+    assert api.post("/api/feeds/opml", json={"text": OPML, "folders": []}).status_code == 422
+    assert api.post("/api/feeds/opml", json={"text": "<opml/>"}).status_code == 422

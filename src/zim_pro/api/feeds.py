@@ -274,38 +274,90 @@ async def check(body: CheckBody, ctx: Context = Depends(get_context)) -> dict[st
 
 class OpmlBody(BaseModel):
     text: str = Field(max_length=5_000_000)
+    # Only say what the file holds; add nothing.
+    preview: bool = False
+    # Which of the file's folders to bring in, by their place in the preview; all if None.
+    folders: list[int] | None = None
+    # Put every feed chosen into one collection of this name, in place of one per folder.
+    single: str = Field(default="", max_length=200)
+    category: str = Field(default="", max_length=80)
+    # Start filling the collections straight away.
+    sync: bool = False
 
 
-@router.post("/opml")
-def import_opml(body: OpmlBody, ctx: Context = Depends(get_context)) -> dict[str, Any]:
-    """Add the feeds of an OPML file: one collection per folder."""
+def _opml_folders(text: str) -> list[tuple[str, list[tuple[str, str]]]]:
     try:
-        folders = parse.read_opml(body.text)
+        folders = parse.read_opml(text)
     except parse.NotAFeed as exc:
         raise HTTPException(422, str(exc)) from exc
     if not folders:
         raise HTTPException(422, "This OPML file lists no feeds.")
+    return [(name or "Imported feeds", feeds) for name, feeds in folders]
+
+
+@router.post("/opml")
+def import_opml(body: OpmlBody, ctx: Context = Depends(get_context)) -> dict[str, Any]:
+    """Add the feeds of an OPML file: one collection per folder, or all in one."""
+    folders = _opml_folders(body.text)
+    if body.preview:
+        known = {r["url"] for r in ctx.db.all("SELECT url FROM feed_sources")}
+        titles = {r["title"].lower() for r in ctx.db.all("SELECT title FROM feeds")}
+        return {
+            "folders": [
+                {
+                    "name": name,
+                    "exists": name.lower() in titles,
+                    "feeds": [
+                        {"title": title, "url": url, "known": url in known} for title, url in feeds
+                    ],
+                }
+                for name, feeds in folders
+            ]
+        }
+    chosen = [
+        folder
+        for index, folder in enumerate(folders)
+        if body.folders is None or index in body.folders
+    ]
+    if not chosen:
+        raise HTTPException(422, "Choose at least one folder to import.")
+    if body.single.strip():
+        chosen = [(body.single.strip(), [feed for _, feeds in chosen for feed in feeds])]
+    category = use_category(ctx, body.category)
     interval = int(ctx.db.get_setting("feed_default_interval"))
     keep = int(ctx.db.get_setting("feed_default_keep"))
-    added = 0
-    for name, feeds in folders:
-        title = name or "Imported feeds"
-        row = ctx.db.one("SELECT id FROM feeds WHERE title = ?", (title,))
+    added, touched = 0, []
+    for title, feeds in chosen:
+        row = ctx.db.one("SELECT id FROM feeds WHERE title = ? COLLATE NOCASE", (title,))
         feed_id = (
             row["id"]
             if row
             else ctx.db.execute(
-                "INSERT INTO feeds (title, interval_minutes, keep) VALUES (?, ?, ?)",
-                (title, interval, keep),
+                "INSERT INTO feeds (title, interval_minutes, keep, category) VALUES (?, ?, ?, ?)",
+                (title, interval, keep, category),
             ).lastrowid
         )
+        if row and category:
+            ctx.db.execute("UPDATE feeds SET category = ? WHERE id = ?", (category, feed_id))
         for source_title, address in feeds:
             cursor = ctx.db.execute(
                 "INSERT OR IGNORE INTO feed_sources (feed_id, url, title) VALUES (?, ?, ?)",
                 (feed_id, address, source_title[:200]),
             )
             added += cursor.rowcount
-    return {**_listing(ctx), "added": added, "collections": len(folders)}
+        touched.append(feed_id)
+    _refile(ctx)
+    started = 0
+    if body.sync:
+        for feed_id in touched:
+            enabled = ctx.db.one("SELECT enabled FROM feeds WHERE id = ?", (feed_id,))
+            if enabled and enabled["enabled"]:
+                try:
+                    ctx.feeds.sync(feed_id, False)
+                    started += 1
+                except BuildError:
+                    pass  # already syncing
+    return {**_listing(ctx), "added": added, "collections": len(chosen), "syncing": started}
 
 
 @router.get("/opml")

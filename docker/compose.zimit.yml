@@ -13,6 +13,14 @@ services:
     image: ghcr.io/magicstack-llp/zim-pro:${ZIM_PRO_TAG:-latest}
     container_name: zim-pro
     restart: unless-stopped
+    healthcheck:
+      # The server answers and its database can be read. The first start scans the whole
+      # library before it answers, hence the long start_period.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=8)"]
+      interval: 30s
+      timeout: 10s
+      start_period: 2m
+      retries: 3
     user: "${PUID:-1000}:${PGID:-1000}"
     ports:
       - "${PORT:-8083}:8080"

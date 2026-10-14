@@ -19,6 +19,13 @@ BOOK_COLUMNS = (
 )
 
 
+@router.get("/health")
+def health(ctx: Context = Depends(get_context)) -> dict[str, bool]:
+    """For container health checks: the server answers and its database can be read."""
+    ctx.db.scalar("SELECT 1")
+    return {"ok": True}
+
+
 @router.get("/status")
 def status(ctx: Context = Depends(get_context)) -> dict[str, Any]:
     usage = shutil.disk_usage(ctx.config.data_dir)

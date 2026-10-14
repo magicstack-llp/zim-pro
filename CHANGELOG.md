@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Zim Pro is licensed under the GNU General Public License v3.0, with a contributing guide,
+  a code of conduct, a security policy, and issue and pull request templates.
+- Health checks: `/api/health`, a `HEALTHCHECK` in the image, and a health check for every
+  service in the compose files. The captcha solver inside the VPN waits until the VPN is
+  healthy, and so does Zim Pro when all of its traffic goes through the VPN.
+
+### Changed
+
+- **Import OPML** shows what the file holds before anything is added: its folders and
+  feeds, with those you already have marked. Choose which folders to bring in, one
+  collection per folder or all in one, a category, and whether to sync straight away.
+  Drop the file on the dialog, choose it, or paste the text.
+
 ### Fixed
 
 - In the first minute after the machine starts, an automatic change of VPN address was

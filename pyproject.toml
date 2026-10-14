@@ -3,6 +3,8 @@ name = "zim-pro"
 version = "0.4.0"
 description = "Offline AI knowledge base: read, search and ask your ZIM library (Wikipedia and the Kiwix catalog) with a local or hosted model, and serve it to LLM apps over MCP."
 readme = "README.md"
+license = "GPL-3.0-only"
+license-files = ["LICENSE"]
 authors = [
     { name = "Kuldip Satpute", email = "satputekuldip@gmail.com" }
 ]

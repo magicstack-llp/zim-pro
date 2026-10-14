@@ -360,3 +360,7 @@ def test_about_says_what_is_running(client):
     about = client.get("/api/about").json()
     assert about["name"] == "Zim Pro" and about["version"] and about["python"]
     assert about["repository"].endswith("magicstack-llp/zim-pro")
+
+
+def test_health_answers_for_container_checks(client):
+    assert client.get("/api/health").json() == {"ok": True}

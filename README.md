@@ -562,8 +562,11 @@ A **collection** is one or more feed addresses kept as a single ZIM. Its first p
 every article, newest first, by month.
 
 - **Add feeds** by address, or type a site's address and press **Find feeds** to see the
-  feeds it advertises. **Import OPML** brings in the feeds from another reader, one
-  collection per folder; **Export OPML** writes yours out.
+  feeds it advertises. **Import OPML** brings in the feeds from another reader
+  (Feedly, Inoreader, NetNewsWire, Miniflux, Thunderbird): drop the file in, see its folders
+  and feeds (with the ones you already have marked), tick the folders you want, and choose
+  one collection per folder or all in one, a category, and whether to sync straight away.
+  **Export OPML** writes yours out.
 - **Only new articles are fetched.** Each sync reads the feeds, downloads the articles it
   has not seen, and writes the ZIM again from what it already keeps on disk. If nothing is
   new, the ZIM is left alone.
@@ -694,6 +697,12 @@ uv run pytest
 (cd web && npm test)
 ```
 
+## Contributing
+
+Bug reports, ideas and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) for
+how to set up, run the checks and send a change, and the [Code of Conduct](CODE_OF_CONDUCT.md).
+Please report security problems privately, as [SECURITY.md](SECURITY.md) describes.
+
 ## Built with
 
 Python 3.13, FastAPI and [python-libzim](https://github.com/openzim/python-libzim) on the
@@ -721,3 +730,13 @@ git tag v0.4.0 && git push origin v0.4.0
 
 Every push to `master` and every pull request runs `.github/workflows/ci.yml`: Python lint
 (`ruff check`), formatting check and tests, and the web app's type check, tests and build.
+
+## Licence
+
+Copyright (C) 2026 Kuldip Satpute and Magicstack Enterprise LLP.
+
+Zim Pro is free software: you can redistribute it and/or modify it under the terms of the
+[GNU General Public License, version 3](LICENSE), as published by the Free Software
+Foundation. It is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
+PURPOSE. See the licence for details.
