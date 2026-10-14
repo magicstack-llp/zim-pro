@@ -40,7 +40,7 @@ It replaces `kiwix-serve`.
   </tr>
   <tr>
     <td width="50%" valign="top"><a href="screenshots/updates.png"><img src="screenshots/updates.png" alt="Updates from the Kiwix catalog" width="100%"></a><br><sub>Updates from the Kiwix catalog</sub></td>
-    <td width="50%" valign="top"><a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings, in sections: AI providers, Ask AI, web search and read aloud" width="100%"></a><br><sub>Settings, in sections: AI providers, Ask AI, web search and read aloud</sub></td>
+    <td width="50%" valign="top"><a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings, in sections: AI, queues, monitoring, logs and more" width="100%"></a><br><sub>Settings, in sections: AI, queues, monitoring, logs and more</sub></td>
   </tr>
   <tr>
     <td width="50%" valign="top"><a href="screenshots/create.png"><img src="screenshots/create.png" alt="Create: your own ZIMs from web links, each with its own schedule" width="100%"></a><br><sub>Create: your own ZIMs from web links, each with its own schedule</sub></td>
@@ -49,6 +49,10 @@ It replaces `kiwix-serve`.
   <tr>
     <td width="50%" valign="top"><a href="screenshots/create-jobs.png"><img src="screenshots/create-jobs.png" alt="Build jobs, with what each one saved" width="100%"></a><br><sub>Build jobs, with what each one saved</sub></td>
     <td width="50%" valign="top"><a href="screenshots/feeds.png"><img src="screenshots/feeds.png" alt="Feeds: ZIMs kept up to date from RSS and Atom feeds" width="100%"></a><br><sub>Feeds: ZIMs kept up to date from RSS and Atom feeds</sub></td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top"><a href="screenshots/monitoring.png"><img src="screenshots/monitoring.png" alt="Monitoring: health checks and the last hour of resources and traffic" width="100%"></a><br><sub>Monitoring: health checks, resources and traffic</sub></td>
+    <td width="50%" valign="top"></td>
   </tr>
 </table>
 
@@ -290,7 +294,7 @@ Removing the container loses nothing: the books are in `zims` and the settings, 
 download progress are in `state`. A download in progress when the container stops carries on
 from where it was when it starts again.
 
-To stay on one version, use a version tag in place of `latest`, such as `:0.4.0` or `:0.4`.
+To stay on one version, use a version tag in place of `latest`, such as `:0.5.0` or `:0.5`.
 
 ### Build the image yourself
 
@@ -314,8 +318,8 @@ it, with the web app included in both.
 **Standalone executable** for Linux (x86-64 and arm64). One file, no Python needed:
 
 ```sh
-tar -xzf zim-pro-0.4.0-linux-x86_64.tar.gz
-cd zim-pro-0.4.0-linux-x86_64
+tar -xzf zim-pro-0.5.0-linux-x86_64.tar.gz
+cd zim-pro-0.5.0-linux-x86_64
 KIWIX_DATA_DIR=/path/to/zims KIWIX_STATE_DIR=./state ./zim-pro   # http://localhost:8080
 ```
 
@@ -766,7 +770,7 @@ The package version comes from the tag, and the release notes from that version'
 tagging.
 
 ```sh
-git tag v0.4.0 && git push origin v0.4.0
+git tag v0.5.0 && git push origin v0.5.0
 ```
 
 Every push to `master` and every pull request runs `.github/workflows/ci.yml`: Python lint
