@@ -9,6 +9,12 @@
 [Kiwix catalog](https://library.kiwix.org)) into a library you can read, search and question,
 on your own machine.
 
+<a href="https://self-hosted.directory" target="_blank" rel="noopener noreferrer">
+  <img src="https://self-hosted.directory/badge-light.svg" alt="Featured on Self-Hosted.Directory" width="133" height="36" className="h-9 w-auto" />
+</a>
+
+
+
 - **Knowledge that stays with you.** The books live on your disk and are read, searched and
   kept up to date by your own server.
 - **AI that answers from them.** Ask a question and the answer is written from your books,
