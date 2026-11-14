@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-11-14
+
+### Security
+
+- Sandbox the ZIM Reader iframe (`allow-scripts allow-forms allow-popups`, no `allow-same-origin`) and enforce a strict `Content-Security-Policy` + `X-Content-Type-Options: nosniff` on `/content`.
+- Require an admin token or MCP key on `/mcp` by default, even when no keys exist or after the last key is deleted; enforce write guards on MCP `start_update`.
+- Add private-IP and `robots.txt` checks on builder embedded resources and icons, escape interpolated URLs/attributes in HTML extractors and EPUB/MOBI converters, and percent-decode before path-traversal normalization in `resolve_link()`.
+- Add `Prompt` delimiters around untrusted source excerpts and strip `[n]` markers from assistant history.
+
+### Fixed
+
+- **Database & Concurrency:** Add partial unique indexes (`downloads_active`, `builds_active`), `CHECK` constraints, `feed_sources`/`feed_items` foreign keys, `Database.transaction()`, numbered `PRAGMA user_version` migrations, atomic queue enqueue/claim, process-wide build slug reservations, and `asyncio.shield` cancellation safety for threaded build/scan work.
+- **Downloads & Catalog:** Add segment deadlines and minimum-speed checks, mandatory SHA-256 and resume piece re-hashing, loop error boundaries, `DiskError` handling, `Content-Range` validation, conditional `ETag`/`304` OPDS refresh, and accurate release-date comparisons.
+- **Feeds & Scheduler:** Handle malformed URL `ValueError` per source without aborting syncs, revive `keep`-dropped and `skipped` items, persist discovered feed languages, and gate scheduled feed syncs on `feed_auto_sync`.
+- **AI, Retrieval & Queues:** Enforce token/history budgeting and `max_tokens`, score excerpt coverage on emitted text, add CJK tokenization, retry 429/5xx provider errors with multiline SSE parsing, honour the Redis outage window with a 5 s `info()` TTL cache, and read rotated logs cleanly.
+- **Frontend:** Fix mutation-only 401 auth prompts, request timeouts and `AbortController` cleanup, `Feeds` offset pagination, `Queues` failed-PUT state, code-aware citation linking, dialog focus trapping, and ARIA roles.
+
 ## [0.5.0] - 2026-10-14
 
 ### Added
@@ -229,7 +246,8 @@ First release.
 - **Packaging.** A Docker image for amd64 and arm64 on GHCR, and a Python wheel with the web
   app inside, both published by a release workflow when a version tag is pushed.
 
-[Unreleased]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.1...HEAD
+[0.5.1]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/magicstack-llp/zim-pro/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/magicstack-llp/zim-pro/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/magicstack-llp/zim-pro/compare/v0.2.1...v0.3.0
