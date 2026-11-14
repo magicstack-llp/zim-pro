@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-11-15
+
+### Fixed
+
+- Treat an empty `KIWIX_ADMIN_TOKEN` (`""`) as unset (`None`) in `Config` so Docker Compose deployments with `ADMIN_TOKEN=` start without a Pydantic `ValidationError`.
+
 ## [0.5.1] - 2026-11-14
 
 ### Security
@@ -246,7 +252,8 @@ First release.
 - **Packaging.** A Docker image for amd64 and arm64 on GHCR, and a Python wheel with the web
   app inside, both published by a release workflow when a version tag is pushed.
 
-[Unreleased]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.1...HEAD
+[Unreleased]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.2...HEAD
+[0.5.2]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/magicstack-llp/zim-pro/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/magicstack-llp/zim-pro/compare/v0.3.0...v0.4.0
