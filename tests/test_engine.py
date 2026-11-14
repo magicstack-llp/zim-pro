@@ -244,7 +244,7 @@ async def test_rate_limiter_does_not_serialize_sleep(monkeypatch):
         ),
         (
             b'<metalink xmlns="urn:ietf:params:xml:ns:metalink"><file name="a.zim">'
-            b"<size>10</size><hash type=\"sha-256\">" + b"a" * 64 + b"</hash>"
+            b'<size>10</size><hash type="sha-256">' + b"a" * 64 + b"</hash>"
             b'<pieces length="0" type="sha-1"><hash>' + b"b" * 40 + b"</hash></pieces>"
             b"<url>https://example.com/a.zim</url></file></metalink>"
         ),
@@ -254,7 +254,7 @@ async def test_rate_limiter_does_not_serialize_sleep(monkeypatch):
         ),
         (
             b'<metalink xmlns="urn:ietf:params:xml:ns:metalink"><file name="a.zim">'
-            b"<size>10</size><hash type=\"sha-256\">" + b"a" * 64 + b"</hash>"
+            b'<size>10</size><hash type="sha-256">' + b"a" * 64 + b"</hash>"
             b'<pieces length="4" type="sha-1"><hash>' + b"b" * 40 + b"</hash></pieces>"
             b"<url>https://example.com/a.zim</url></file></metalink>"
         ),

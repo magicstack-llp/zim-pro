@@ -914,7 +914,7 @@ async def test_cancel_mid_crawl_records_zero_failed_pages(tmp_path):
 
 def test_html_injection_is_escaped_in_extract_and_epub(tmp_path):
     malicious = (
-        '<html><body><main>'
+        "<html><body><main>"
         '<img src="https://example.org/a.png" alt="<img src=x onerror=alert(1)>">'
         "<video src='https://example.org/v\" onmouseover=\"alert(1)'></video>"
         "</main></body></html>"
@@ -952,7 +952,7 @@ def test_html_injection_is_escaped_in_extract_and_epub(tmp_path):
         )
         zf.writestr(
             "OEBPS/c1.xhtml",
-            '<html><body><p>Hello</p>'
+            "<html><body><p>Hello</p>"
             '<img src="a.png" alt="<script>alert(1)</script>"/></body></html>',
         )
     stage = Stage(tmp_path / "stage")
@@ -967,7 +967,7 @@ async def test_resources_respect_robots_and_reject_private_addresses(tmp_path):
         "/robots.txt": ("text/plain", b"User-agent: *\nDisallow: /img/"),
         "/": (
             "text/html",
-            b'<html><body><main><h1>Hi</h1>'
+            b"<html><body><main><h1>Hi</h1>"
             b'<img src="/img/blocked.png" alt="B">'
             b'<img src="http://127.0.0.1:8080/secret.png" alt="S">'
             b"</main></body></html>",
@@ -1206,7 +1206,7 @@ async def test_pause_holds_resource_fetching(tmp_path):
     site.pages = {
         "/": (
             "text/html",
-            b'<html><body><main><h1>Hi</h1>'
+            b"<html><body><main><h1>Hi</h1>"
             b'<img src="/img/a.png" alt="A"><img src="/img/b.png" alt="B">'
             b"</main></body></html>",
         ),
@@ -1267,7 +1267,9 @@ async def test_max_total_mb_stops_saving_pages(tmp_path):
 
 
 def test_normalise_sorts_query_and_resolves_dot_segments():
-    assert extract.normalise("https://example.org/a/../b?b=2&a=1") == "https://example.org/b?a=1&b=2"
+    assert (
+        extract.normalise("https://example.org/a/../b?b=2&a=1") == "https://example.org/b?a=1&b=2"
+    )
 
 
 def test_epub_rejects_dotdot_href(tmp_path):
@@ -1284,10 +1286,10 @@ def test_epub_rejects_dotdot_href(tmp_path):
             "OEBPS/content.opf",
             '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0">'
             '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title></metadata>'
-            '<manifest>'
+            "<manifest>"
             '<item id="bad" href="../../evil.xhtml" media-type="application/xhtml+xml"/>'
             '<item id="ok" href="ok.xhtml" media-type="application/xhtml+xml"/>'
-            '</manifest>'
+            "</manifest>"
             '<spine><itemref idref="bad"/><itemref idref="ok"/></spine></package>',
         )
         zf.writestr("OEBPS/ok.xhtml", "<html><body><p>Good chapter</p></body></html>")

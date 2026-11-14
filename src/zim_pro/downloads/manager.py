@@ -431,9 +431,7 @@ class DownloadManager:
             self._active_targets[filename] = download_id
             target = self.data_dir / filename
             pieces = (
-                row["pieces"]
-                if row["filename"] == filename and row["size"] == link.size
-                else None
+                row["pieces"] if row["filename"] == filename and row["size"] == link.size else None
             )
             with self.db.transaction():
                 self.db.execute(

@@ -598,9 +598,7 @@ def _decode(data: bytes, content_type_header: str = "") -> str:
     header_match = re.search(r"charset\s*=\s*['\"]?([\w-]+)", content_type_header, re.I)
     bare = content_type_header.strip()
     header_enc = (
-        header_match.group(1)
-        if header_match
-        else (bare if re.fullmatch(r"[\w-]+", bare) else "")
+        header_match.group(1) if header_match else (bare if re.fullmatch(r"[\w-]+", bare) else "")
     )
     head = data[:65536]
     meta_match = (

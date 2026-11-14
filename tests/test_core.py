@@ -98,9 +98,7 @@ def test_f3_feed_foreign_keys_cascade_and_set_null():
     db = Database(":memory:")
     db.execute("INSERT INTO feeds (id, title) VALUES (1, 'News')")
     db.execute("INSERT INTO feed_sources (id, feed_id, url) VALUES (10, 1, 'https://a.test/rss')")
-    db.execute(
-        "INSERT INTO feed_items (id, feed_id, source_id, guid) VALUES (100, 1, 10, 'g1')"
-    )
+    db.execute("INSERT INTO feed_items (id, feed_id, source_id, guid) VALUES (100, 1, 10, 'g1')")
 
     db.execute("DELETE FROM feed_sources WHERE id = 10")
     item = db.one("SELECT source_id FROM feed_items WHERE id = 100")
@@ -189,9 +187,7 @@ def test_f7_check_constraints_reject_invalid_values():
             "VALUES ('u', 'b', 'https://x', 'finished')"
         )
     with pytest.raises(sqlite3.IntegrityError):
-        db.execute(
-            "INSERT INTO builds (kind, source_id, state) VALUES ('whatever', 1, 'queued')"
-        )
+        db.execute("INSERT INTO builds (kind, source_id, state) VALUES ('whatever', 1, 'queued')")
     with pytest.raises(sqlite3.IntegrityError):
         db.execute(
             "INSERT INTO books (id, path, filename, size, mtime, policy) "
@@ -216,9 +212,7 @@ def test_f8_admin_token_validation_and_case_insensitive_bearer(tmp_path):
     with TestClient(app) as client:
         assert client.get("/api/mcp/keys").status_code == 401
         assert (
-            client.get(
-                "/api/mcp/keys", headers={"Authorization": "Bearer wrong"}
-            ).status_code
+            client.get("/api/mcp/keys", headers={"Authorization": "Bearer wrong"}).status_code
             == 401
         )
         assert (
@@ -227,12 +221,9 @@ def test_f8_admin_token_validation_and_case_insensitive_bearer(tmp_path):
             ).status_code
             == 200
         )
+        assert client.get("/mcp", headers={"Authorization": "Bearer wrong"}).status_code == 401
         assert (
-            client.get("/mcp", headers={"Authorization": "Bearer wrong"}).status_code == 401
-        )
-        assert (
-            client.get("/mcp", headers={"authorization": "bearer secret-token"}).status_code
-            != 401
+            client.get("/mcp", headers={"authorization": "bearer secret-token"}).status_code != 401
         )
 
 

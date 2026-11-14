@@ -262,9 +262,7 @@ def get_settings(ctx: Context = Depends(get_context)) -> dict[str, Any]:
 
 
 @router.put("/settings", dependencies=[Depends(require_admin)])
-def put_settings(
-    values: dict[str, Any], ctx: Context = Depends(get_context)
-) -> dict[str, Any]:
+def put_settings(values: dict[str, Any], ctx: Context = Depends(get_context)) -> dict[str, Any]:
     clean: dict[str, Any] = {}
     for key, value in values.items():
         default = DEFAULT_SETTINGS.get(key)

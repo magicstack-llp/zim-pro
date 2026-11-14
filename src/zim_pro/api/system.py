@@ -342,9 +342,7 @@ def job_action(
     if action not in JOB_ACTIONS:
         raise HTTPException(404, "No such action.")
     spec = QUEUES[name]
-    if not ctx.db.one(
-        f"SELECT 1 FROM {spec['table']} WHERE id = ? AND {spec['where']}", (job_id,)
-    ):
+    if not ctx.db.one(f"SELECT 1 FROM {spec['table']} WHERE id = ? AND {spec['where']}", (job_id,)):
         raise HTTPException(404, "No such job in this queue.")
     try:
         if action in ("top", "up", "down", "bottom"):

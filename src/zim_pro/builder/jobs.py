@@ -646,7 +646,13 @@ class BuildManager:
         previous = self.db.one("SELECT path FROM books WHERE id = ?", (meta.name,))
         self.pool.invalidate(str(target))
         report = await self._run_thread(
-            reporter, write_zim, stage, meta, target, self._workers(), reporter.progress,
+            reporter,
+            write_zim,
+            stage,
+            meta,
+            target,
+            self._workers(),
+            reporter.progress,
             reporter.check,
         )
         reporter.phase("verifying")

@@ -623,7 +623,11 @@ async def test_f2_f3_keep_respects_saved_count_reports_dropped_and_revives(tmp_p
     from zim_pro.feeds.sync import FeedSync
 
     sync2 = FeedSync(
-        db, feed, tmp_path / "r1" / "store", Stage(tmp_path / "s2"), Reporter(),
+        db,
+        feed,
+        tmp_path / "r1" / "store",
+        Stage(tmp_path / "s2"),
+        Reporter(),
         transport=httpx.MockTransport(site),
     )
     _, out2 = await sync2.run()
@@ -634,7 +638,11 @@ async def test_f2_f3_keep_respects_saved_count_reports_dropped_and_revives(tmp_p
     db.execute("UPDATE feeds SET keep = 0")
     feed = db.one("SELECT * FROM feeds WHERE id = 1")
     sync3 = FeedSync(
-        db, feed, tmp_path / "r1" / "store", Stage(tmp_path / "s3"), Reporter(),
+        db,
+        feed,
+        tmp_path / "r1" / "store",
+        Stage(tmp_path / "s3"),
+        Reporter(),
         transport=httpx.MockTransport(site),
     )
     _, out3 = await sync3.run()
@@ -672,8 +680,12 @@ async def test_f4_language_persists_when_declaring_source_fails(tmp_path, no_wai
     db.execute("INSERT INTO feed_sources (feed_id, url) VALUES (1, 'https://news.test/fr.xml')")
     db.execute("INSERT INTO feed_sources (feed_id, url) VALUES (1, 'https://news.test/en.xml')")
     sync1 = FeedSync(
-        db, db.one("SELECT * FROM feeds WHERE id = 1"), tmp_path / "store",
-        Stage(tmp_path / "s1"), Reporter(), transport=httpx.MockTransport(site),
+        db,
+        db.one("SELECT * FROM feeds WHERE id = 1"),
+        tmp_path / "store",
+        Stage(tmp_path / "s1"),
+        Reporter(),
+        transport=httpx.MockTransport(site),
     )
     meta1, _ = await sync1.run()
     assert meta1 is not None and meta1.language == "fra"
@@ -681,8 +693,13 @@ async def test_f4_language_persists_when_declaring_source_fails(tmp_path, no_wai
 
     fail_fr = True
     sync2 = FeedSync(
-        db, db.one("SELECT * FROM feeds WHERE id = 1"), tmp_path / "store",
-        Stage(tmp_path / "s2"), Reporter(), rebuild=True, transport=httpx.MockTransport(site),
+        db,
+        db.one("SELECT * FROM feeds WHERE id = 1"),
+        tmp_path / "store",
+        Stage(tmp_path / "s2"),
+        Reporter(),
+        rebuild=True,
+        transport=httpx.MockTransport(site),
     )
     meta2, _ = await sync2.run()
     assert meta2 is not None and meta2.language == "fra"
@@ -786,8 +803,12 @@ async def test_f8_missing_item_record_refetched_instead_of_unchanged(tmp_path, n
     (tmp_path / "store" / "items" / "1.json").unlink()
     site.asked.clear()
     sync2 = FeedSync(
-        db, db.one("SELECT * FROM feeds WHERE id = 1"), tmp_path / "store",
-        Stage(tmp_path / "s2"), Reporter(), transport=httpx.MockTransport(site),
+        db,
+        db.one("SELECT * FROM feeds WHERE id = 1"),
+        tmp_path / "store",
+        Stage(tmp_path / "s2"),
+        Reporter(),
+        transport=httpx.MockTransport(site),
     )
     meta, outcome = await sync2.run()
     assert meta is not None and outcome["new"] == 1
@@ -840,9 +861,7 @@ def test_f11_check_rejects_oversized_response(api, monkeypatch):
     assert res.status_code == 422
 
 
-async def test_f13_skips_carried_prepare_when_page_is_long(
-    tmp_path, no_waiting, monkeypatch
-):
+async def test_f13_skips_carried_prepare_when_page_is_long(tmp_path, no_waiting, monkeypatch):
     from zim_pro.builder import extract
 
     calls = 0

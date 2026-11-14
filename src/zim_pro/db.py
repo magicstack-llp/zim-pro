@@ -15,6 +15,7 @@ log = logging.getLogger(__name__)
 class StartupError(RuntimeError):
     """Raised when the database or library directories cannot be initialized."""
 
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS books (
     id TEXT PRIMARY KEY,
@@ -352,9 +353,7 @@ class Database:
                         ("steps", "TEXT"),
                     ),
                 )
-                self._ensure_columns(
-                    "ai_providers", (("enabled", "INTEGER NOT NULL DEFAULT 1"),)
-                )
+                self._ensure_columns("ai_providers", (("enabled", "INTEGER NOT NULL DEFAULT 1"),))
                 self._ensure_columns(
                     "links",
                     (

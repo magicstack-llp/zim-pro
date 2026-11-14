@@ -306,11 +306,19 @@ class Monitor:
             for job_id, active in list(manager._active.items()):
                 snap = active.reporter.snapshot()
                 waiting = bool(snap["detail"]) or active.reporter.paused.is_set()
-                observations.append((
-                    f"{name} {job_id}",
-                    (snap["phase"], snap["done"], snap["total"], snap["failed"], snap["skipped"]),
-                    waiting,
-                ))
+                observations.append(
+                    (
+                        f"{name} {job_id}",
+                        (
+                            snap["phase"],
+                            snap["done"],
+                            snap["total"],
+                            snap["failed"],
+                            snap["skipped"],
+                        ),
+                        waiting,
+                    )
+                )
         for job_id, active in list(self.ctx.downloads._active.items()):
             done = active.download.bytes_done if active.download else 0
             observations.append((f"download {job_id}", done, False))

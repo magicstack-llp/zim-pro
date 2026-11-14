@@ -72,9 +72,7 @@ def normalise(url: str, base: str = "") -> str:
     if parts.scheme not in ("http", "https") or not parts.netloc:
         return ""
     query = sorted(
-        (k, v)
-        for k, v in parse_qsl(parts.query, keep_blank_values=True)
-        if not _TRACKING.match(k)
+        (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if not _TRACKING.match(k)
     )
     path = _resolve_dot_segments(re.sub(r"/{2,}", "/", parts.path) or "/")
     path = quote(unquote(path), safe="/:@!$&'()*+,;=~.-_")

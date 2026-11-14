@@ -216,10 +216,7 @@ def list_items(
         raise HTTPException(422, f"state must be one of {', '.join(ITEM_STATES)}")
     query = q.strip()
     escaped_q = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    where = (
-        "i.feed_id = ? AND (? = '' OR i.state = ?) "
-        "AND (? = '' OR i.title LIKE ? ESCAPE '\\')"
-    )
+    where = "i.feed_id = ? AND (? = '' OR i.state = ?) AND (? = '' OR i.title LIKE ? ESCAPE '\\')"
     args = (feed_id, state, state, query, f"%{escaped_q}%")
     rows = ctx.db.all(
         "SELECT i.id, i.url, i.title, i.author, i.published, i.state, i.error, i.path, "

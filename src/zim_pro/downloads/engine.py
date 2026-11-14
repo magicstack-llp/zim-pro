@@ -282,15 +282,11 @@ class Download:
             return min(MIN_SPEED, max(1024.0, self.limiter.rate * 0.5))
         return float(MIN_SPEED)
 
-    def _validate_range_response(
-        self, response: httpx.Response, start: int, end: int
-    ) -> None:
+    def _validate_range_response(self, response: httpx.Response, start: int, end: int) -> None:
         expected_len = end - start + 1
         if response.status_code == 416:
             raise DownloadError(f"HTTP 416 (range {start}-{end} not satisfiable)")
-        whole_file = (
-            response.status_code == 200 and start == 0 and end == self.metalink.size - 1
-        )
+        whole_file = response.status_code == 200 and start == 0 and end == self.metalink.size - 1
         if response.status_code != 206 and not whole_file:
             raise DownloadError(f"HTTP {response.status_code}")
         if response.status_code == 206:
