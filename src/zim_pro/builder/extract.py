@@ -48,14 +48,34 @@ td,th{border-color:#3f3f46}a{color:#5eead4}}
 """
 
 
+def _resolve_dot_segments(path: str) -> str:
+    """Resolve ``.`` and ``..`` segments in a URL path, clamping at ``/``."""
+    trailing = path == "" or path.endswith("/") or path.endswith("/.") or path.endswith("/..")
+    resolved: list[str] = []
+    for segment in path.split("/"):
+        if segment in ("", "."):
+            continue
+        if segment == "..":
+            if resolved:
+                resolved.pop()
+        else:
+            resolved.append(segment)
+    out = "/" + "/".join(resolved)
+    if trailing and not out.endswith("/"):
+        out += "/"
+    return out
+
+
 def normalise(url: str, base: str = "") -> str:
     """One spelling for each address: absolute, no fragment, no tracking parameters."""
     parts = urlsplit(urljoin(base, url.strip()))
     if parts.scheme not in ("http", "https") or not parts.netloc:
         return ""
-    query = [(k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True)]
-    query = [(k, v) for k, v in query if not _TRACKING.match(k)]
-    path = re.sub(r"/{2,}", "/", parts.path) or "/"
+    query = sorted(
+        (k, v) for k, v in parse_qsl(parts.query, keep_blank_values=True) if not _TRACKING.match(k)
+    )
+    path = _resolve_dot_segments(re.sub(r"/{2,}", "/", parts.path) or "/")
+    path = quote(unquote(path), safe="/:@!$&'()*+,;=~.-_")
     host = parts.netloc.lower()
     host = host.removesuffix(":80") if parts.scheme == "http" else host.removesuffix(":443")
     return urlunsplit((parts.scheme, host, path, urlencode(query), ""))
@@ -252,7 +272,7 @@ def prepare(
         alt = (node.attributes.get("alt") or "").strip()
         if not address or not images:
             if alt:
-                node.replace_with(f"[{alt}]")
+                node.replace_with(f"[{_escape(alt)}]")
             else:
                 node.decompose()
             continue
@@ -270,8 +290,9 @@ def prepare(
         )
         if not address or not video:
             label = "Video" if node.tag == "video" else "Recording"
+            escaped = _escape(address)
             replacement = HTMLParser(
-                f'<p><a href="{address}">{label} (not included): {address}</a></p>'
+                f'<p><a href="{escaped}">{label} (not included): {escaped}</a></p>'
                 if address
                 else "<p></p>"
             )
@@ -310,7 +331,7 @@ def prepare(
     if content.tag == "body":
         inner = re.sub(r"^<body[^>]*>|</body>$", "", inner.strip())
     shown_title = "" if (heading or not clean) else f"<h1>{_escape(result.title)}</h1>"
-    style_tags = "".join(f'<link rel="stylesheet" href="{a}">' for a in styles)
+    style_tags = "".join(f'<link rel="stylesheet" href="{_escape(a)}">' for a in styles)
     style_tags += "".join(f"<style>{css}</style>" for css in inline)
     result.html = (
         '<!doctype html><html lang="{lang}"><head><meta charset="utf-8">'
@@ -384,7 +405,7 @@ def localise(html: str, path: str, saved: dict[str, str]) -> str:
             # The picture could not be saved: its description is better than a broken box.
             alt = (node.attributes.get("alt") or "").strip()
             if alt:
-                node.replace_with(f"[{alt}]")
+                node.replace_with(f"[{_escape(alt)}]")
             else:
                 node.decompose()
     for node in tree.css("video[src], audio[src]"):
@@ -398,7 +419,8 @@ def localise(html: str, path: str, saved: dict[str, str]) -> str:
         if address in saved:
             node.attrs["src"] = relative(path, saved[address])
         else:
-            link = HTMLParser(f'<p><a href="{address}">Media (not saved): {address}</a></p>')
+            escaped = _escape(address)
+            link = HTMLParser(f'<p><a href="{escaped}">Media (not saved): {escaped}</a></p>')
             node.replace_with(link.css_first("p"))
     for node in tree.css("link[rel=stylesheet][href]"):
         address = node.attributes.get("href") or ""

@@ -4,7 +4,7 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException
 
 from ..catalog import opds
-from ..catalog.updates import book_updates
+from ..catalog.updates import book_updates, is_newer_release
 from ..context import Context, get_context, require_admin
 from .library import BOOK_COLUMNS
 
@@ -22,6 +22,10 @@ SORTS = {
 _PUBLIC_BOOK = [c.strip() for c in BOOK_COLUMNS.split(",")]
 
 
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
 @router.get("/catalog")
 def catalog(
     q: str = "",
@@ -34,20 +38,25 @@ def catalog(
 ) -> dict[str, Any]:
     where, params = ["1 = 1"], []
     for word in q.split():
-        where.append("(title LIKE ? OR summary LIKE ? OR name LIKE ? OR tags LIKE ?)")
-        params += [f"%{word}%"] * 4
+        pat = f"%{_escape_like(word)}%"
+        where.append(
+            "(title LIKE ? ESCAPE '\\' OR summary LIKE ? ESCAPE '\\' "
+            "OR name LIKE ? ESCAPE '\\' OR tags LIKE ? ESCAPE '\\')"
+        )
+        params += [pat] * 4
     if language:
-        where.append("(',' || language || ',') LIKE ?")
-        params.append(f"%,{language},%")
+        where.append("(',' || language || ',') LIKE ? ESCAPE '\\'")
+        params.append(f"%,{_escape_like(language)},%")
     if category:
         where.append("category = ?")
         params.append(category)
     clause = " AND ".join(where)
+    limit = max(1, min(count, 200))
     total = ctx.db.scalar(f"SELECT COUNT(*) FROM catalog WHERE {clause}", params)
     rows = ctx.db.all(
         f"SELECT * FROM catalog WHERE {clause} ORDER BY {SORTS.get(sort, SORTS['title'])} "
         "LIMIT ? OFFSET ?",
-        [*params, max(1, min(count, 200)), max(0, start)],
+        [*params, limit, max(0, start)],
     )
     local = {b["id"]: b for b in ctx.db.all("SELECT id, uuid, date, name, flavour FROM books")}
     by_name = {(b["name"], b["flavour"]): b for b in local.values()}
@@ -62,13 +71,13 @@ def catalog(
         book = local.get(row["stem"]) or by_name.get((row["name"], row["flavour"]))
         if book is None:
             row["local"] = None
-        elif book["uuid"] == row["uuid"] or book["date"][:10] >= row["issued"][:10]:
+        elif not is_newer_release(row["issued"], row["uuid"], book["date"], book["uuid"]):
             row["local"] = "current"
         else:
             row["local"] = "outdated"
         row["book_id"] = book["id"] if book else None
         row["download_state"] = queued.get(row["uuid"])
-    return {"total": total, "results": rows}
+    return {"total": total, "limit": limit, "results": rows}
 
 
 @router.get("/catalog/facets")
@@ -114,7 +123,9 @@ def updates(ctx: Context = Depends(get_context)) -> dict[str, Any]:
     return {
         "items": items,
         "update_count": len(pending),
-        "update_bytes": sum(i["latest"]["size"] for i in pending),
+        "update_bytes": sum(
+            (i["download"] or {}).get("size") or i["latest"]["size"] for i in pending
+        ),
         "disk_free": shutil.disk_usage(ctx.config.data_dir).free,
         "catalog_refreshed": ctx.db.get_meta("catalog_refreshed"),
     }
@@ -126,7 +137,12 @@ async def start_update(book_id: str, ctx: Context = Depends(get_context)) -> dic
         if item["book"]["id"] == book_id:
             if item["status"] != "update":
                 raise HTTPException(409, "No update is available for this book")
-            return ctx.downloads.enqueue(item["latest"]["uuid"])
+            if item["download"] is not None:
+                raise HTTPException(409, "An update download for this book is already active")
+            try:
+                return ctx.downloads.enqueue(item["latest"]["uuid"])
+            except ValueError as exc:
+                raise HTTPException(409, str(exc)) from exc
     raise HTTPException(404, "No such book")
 
 
@@ -135,9 +151,16 @@ async def start_all(ctx: Context = Depends(get_context)) -> dict[str, Any]:
     """Queue every available update, except for pinned books."""
     queued = 0
     for item in book_updates(ctx.db):
-        if item["status"] == "update" and item["book"]["policy"] != "pinned":
-            ctx.downloads.enqueue(item["latest"]["uuid"])
-            queued += 1
+        if (
+            item["status"] == "update"
+            and item["book"]["policy"] != "pinned"
+            and item["download"] is None
+        ):
+            try:
+                ctx.downloads.enqueue(item["latest"]["uuid"])
+                queued += 1
+            except (ValueError, LookupError):
+                continue
     return {"queued": queued}
 
 

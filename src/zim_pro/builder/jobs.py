@@ -9,9 +9,12 @@ on its own threads, and one thread writes the file.
 
 import asyncio
 import contextlib
+import contextvars
 import json
 import logging
 import shutil
+import sqlite3
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -48,6 +51,22 @@ UNPAUSABLE = {
     "capturing": "A browser capture cannot be paused. Cancel it instead.",
 }
 CONVERTERS = {"epub": epub.convert, "pdf": pdf.convert, "mobi": mobi.convert}
+
+_enqueue_lock = threading.Lock()
+_name_lock = threading.Lock()
+_reserved_names: dict[Path, set[str]] = {}
+_held_names: contextvars.ContextVar[list[str] | None] = contextvars.ContextVar(
+    "_held_names", default=None
+)
+
+
+def _json_loads(raw: Any, default: Any) -> Any:
+    if not raw:
+        return default
+    try:
+        return json.loads(raw)
+    except (ValueError, TypeError):
+        return default
 
 
 def per_second(amount: float, unit: str) -> float:
@@ -136,15 +155,15 @@ class BuildManager:
         row = self.db.one("SELECT * FROM builds WHERE id = ?", (build_id,))
         if row is None:
             return None
-        row["log"] = json.loads(row["log"] or "[]")
+        row["log"] = _json_loads(row["log"], [])
         active = self._active.get(build_id)
         if active:
             row["log"] = list(active.reporter.log)
         return self._decorate(row)
 
     def _decorate(self, row: dict[str, Any]) -> dict[str, Any]:
-        row["report"] = json.loads(row.get("report") or "{}")
-        row["params"] = json.loads(row.get("params") or "{}")
+        row["report"] = _json_loads(row.get("report"), {})
+        row["params"] = _json_loads(row.get("params"), {})
         active = self._active.get(row["id"])
         if active:
             row.update(active.reporter.snapshot())
@@ -153,17 +172,21 @@ class BuildManager:
     def enqueue(
         self, kind: str, source_id: int, title: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
-        busy = self.db.one(
-            "SELECT id FROM builds WHERE kind = ? AND source_id = ? "
-            "AND state IN ('queued', 'processing', 'paused')",
-            (kind, source_id),
-        )
-        if busy:
-            raise BuildError("This is already being built.")
-        cursor = self.db.execute(
-            "INSERT INTO builds (kind, source_id, title, params) VALUES (?, ?, ?, ?)",
-            (kind, source_id, title, json.dumps(params or {})),
-        )
+        with _enqueue_lock:
+            busy = self.db.one(
+                "SELECT id FROM builds WHERE kind = ? AND source_id = ? "
+                "AND state IN ('queued', 'processing', 'paused')",
+                (kind, source_id),
+            )
+            if busy:
+                raise BuildError("This is already being built.")
+            try:
+                cursor = self.db.execute(
+                    "INSERT INTO builds (kind, source_id, title, params) VALUES (?, ?, ?, ?)",
+                    (kind, source_id, title, json.dumps(params or {})),
+                )
+            except sqlite3.IntegrityError as exc:
+                raise BuildError("This is already being built.") from exc
         self._changed()
         return self.get(cursor.lastrowid)  # type: ignore[return-value]
 
@@ -215,7 +238,8 @@ class BuildManager:
     def retry(self, build_id: int) -> None:
         self.db.execute(
             "UPDATE builds SET state = 'queued', phase = '', done = 0, total = 0, failed = 0, "
-            "skipped = 0, error = NULL, log = '[]', started = NULL, finished = NULL, "
+            "skipped = 0, size = 0, error = NULL, log = '[]', report = '{}', book_id = '', "
+            "started = NULL, finished = NULL, "
             "position = (SELECT MAX(COALESCE(position, id)) + 1 FROM builds) "
             "WHERE id = ? AND state IN ('failed', 'cancelled', 'finished')",
             (build_id,),
@@ -260,6 +284,7 @@ class BuildManager:
                     )
                     reporter = Reporter()
                     task = asyncio.create_task(self._run_one(build_id, reporter))
+                    task.add_done_callback(self._on_task_done)
                     self._active[build_id] = _Active(task, reporter)
                     started = True
             if started:
@@ -307,6 +332,25 @@ class BuildManager:
             if self._active:
                 self.events.publish(self.EVENT, self.list())
 
+    @staticmethod
+    def _on_task_done(task: asyncio.Task[None]) -> None:
+        if not task.cancelled():
+            exc = task.exception()
+            if exc is not None:
+                log.error("build task crashed: %s", exc, exc_info=exc)
+
+    async def _run_thread(self, reporter: Reporter, fn: Any, *args: Any) -> Any:
+        """Run ``fn`` in a worker thread without letting cancellation orphan it."""
+        task = asyncio.ensure_future(asyncio.to_thread(fn, *args))
+        try:
+            result = await asyncio.shield(task)
+        except asyncio.CancelledError:
+            with contextlib.suppress(BaseException):
+                await task
+            raise
+        reporter.check()
+        return result
+
     async def _run_one(self, build_id: int, reporter: Reporter) -> None:
         with logs.job(f"{self.JOB} {build_id}"):
             await self._run_build(build_id, reporter)
@@ -316,9 +360,11 @@ class BuildManager:
         log.info("started %s", (row or {}).get("title") or build_id)
         stage = Stage(self.work_dir / "stage" / str(build_id))
         state, error, report, book_id = "finished", None, {}, ""
+        held: list[str] = []
+        token = _held_names.set(held)
         try:
             assert row is not None
-            row["params"] = json.loads(row.get("params") or "{}")
+            row["params"] = _json_loads(row.get("params"), {})
             book_id, report = await self._build(row, stage, reporter)
         except (Cancelled, asyncio.CancelledError):
             state = "cancelled"
@@ -332,6 +378,12 @@ class BuildManager:
             log.exception("build %s failed", build_id)
             state, error = "failed", f"Unexpected error: {exc or type(exc).__name__}"
         finally:
+            _held_names.reset(token)
+            if held:
+                with _name_lock:
+                    bucket = _reserved_names.get(self.data_dir.resolve())
+                    if bucket:
+                        bucket.difference_update(held)
             if state == "finished":
                 log.info(
                     "finished: %s pages, %s failed, %.1f MB",
@@ -340,16 +392,29 @@ class BuildManager:
                     (report.get("size") or 0) / 1024**2,
                 )
             stage.clear()
-            self._active.pop(build_id, None)
-            # When the server is going down the record is left alone: start() picks the
-            # build up again.
-            if not (self._stopping and state == "cancelled"):
-                self._record(build_id, reporter, state, error, report, book_id)
-                quiet = report.get("unchanged") and (row or {}).get("kind") == "link"
-                if quiet and row["params"].get("trigger") == "schedule":
-                    # A scheduled look at the feeds that found nothing is not worth a line.
-                    self.db.execute("DELETE FROM builds WHERE id = ?", (build_id,))
-                    self._changed()
+            try:
+                # When the server is going down the record is left alone: start() picks the
+                # build up again.
+                if not (self._stopping and state == "cancelled"):
+                    try:
+                        self._record(build_id, reporter, state, error, report, book_id)
+                    except Exception:
+                        log.exception("failed to record build %s", build_id)
+                        with contextlib.suppress(Exception):
+                            self.db.execute(
+                                "UPDATE builds SET state = 'failed', "
+                                "error = 'Failed to save build result.', "
+                                "finished = unixepoch('subsec') WHERE id = ?",
+                                (build_id,),
+                            )
+                    else:
+                        quiet = report.get("unchanged") and (row or {}).get("kind") == "link"
+                        if quiet and row["params"].get("trigger") == "schedule":
+                            # A scheduled look at the feeds that found nothing is not worth a line.
+                            self.db.execute("DELETE FROM builds WHERE id = ?", (build_id,))
+                            self._changed()
+            finally:
+                self._active.pop(build_id, None)
 
     def _record(
         self,
@@ -426,19 +491,25 @@ class BuildManager:
         return max(1, min(16, int(self.db.get_setting("build_workers"))))
 
     def _name_for(self, table: str, source: dict[str, Any], wanted: str) -> str:
-        """The book id for a source: the one it already has, or a free one."""
+        """The book id for a source: the one it already has, or a free reserved one."""
         if source["book_id"]:
             return source["book_id"]
-        taken = {r["id"] for r in self.db.all("SELECT id FROM books")}
-        for other in ("links", "uploads", "feeds"):
-            taken |= {
-                r["book_id"]
-                for r in self.db.all(f"SELECT book_id FROM {other} WHERE book_id != ''")
-            }
-        name, number = wanted, 2
-        while name in taken:
-            name, number = f"{wanted}-{number}", number + 1
-        return name
+        with _name_lock:
+            reserved = _reserved_names.setdefault(self.data_dir.resolve(), set())
+            taken = {r["id"] for r in self.db.all("SELECT id FROM books")} | reserved
+            for other in ("links", "uploads", "feeds"):
+                taken |= {
+                    r["book_id"]
+                    for r in self.db.all(f"SELECT book_id FROM {other} WHERE book_id != ''")
+                }
+            name, number = wanted, 2
+            while name in taken:
+                name, number = f"{wanted}-{number}", number + 1
+            reserved.add(name)
+            held = _held_names.get()
+            if held is not None:
+                held.append(name)
+            return name
 
     async def _build_link(
         self, row: dict[str, Any], stage: Stage, reporter: Reporter
@@ -453,7 +524,9 @@ class BuildManager:
                 made = await zimit.capture(link, folder, reporter, name)
                 reporter.phase("verifying")
                 target = self.data_dir / f"{name}_{time.strftime('%Y-%m')}.zim"
-                report = await asyncio.to_thread(self._adopt, made, target, True)
+                report = await self._run_thread(
+                    reporter, self._adopt, made, target, True, reporter.check
+                )
             finally:
                 shutil.rmtree(folder, ignore_errors=True)
         else:
@@ -531,11 +604,14 @@ class BuildManager:
             reporter.phase("verifying")
             stem, _ = split_filename(upload["filename"])
             target = self.data_dir / upload["filename"]
-            report = await asyncio.to_thread(self._adopt, source, target, True)
+            report = await self._run_thread(
+                reporter, self._adopt, source, target, False, reporter.check
+            )
             name = stem
         else:
             convert = CONVERTERS[upload["kind"]]
-            meta: ZimMeta = await asyncio.to_thread(
+            meta: ZimMeta = await self._run_thread(
+                reporter,
                 convert,
                 source,
                 stage,
@@ -559,7 +635,7 @@ class BuildManager:
     ) -> dict[str, Any]:
         """Write the staged content as a ZIM in the library and retire the one it replaces."""
         reporter.check()
-        needed = stage.size + FREE_SPACE_MARGIN
+        needed = int(stage.size * 1.3) + FREE_SPACE_MARGIN
         free = shutil.disk_usage(self.data_dir).free
         if free < needed:
             raise BuildError(
@@ -569,18 +645,27 @@ class BuildManager:
         target = self.data_dir / meta.filename
         previous = self.db.one("SELECT path FROM books WHERE id = ?", (meta.name,))
         self.pool.invalidate(str(target))
-        report = await asyncio.to_thread(
-            write_zim, stage, meta, target, self._workers(), reporter.progress
+        report = await self._run_thread(
+            reporter,
+            write_zim,
+            stage,
+            meta,
+            target,
+            self._workers(),
+            reporter.progress,
+            reporter.check,
         )
         reporter.phase("verifying")
         self._retire(previous, target)
-        await asyncio.to_thread(self.scanner.scan)
+        await self._run_thread(reporter, self.scanner.scan)
         if history:
             self._history(meta.name, meta.title, report["size"], bool(previous))
         report["title"] = meta.title
         return report
 
-    def _adopt(self, made: Path, target: Path, move: bool = False) -> dict[str, Any]:
+    def _adopt(
+        self, made: Path, target: Path, move: bool = False, check: Any = None
+    ) -> dict[str, Any]:
         """Take a ready-made ZIM into the library after checking that it opens."""
         try:
             archive = Archive(str(made))
@@ -590,14 +675,23 @@ class BuildManager:
         except Exception as exc:
             raise BuildError(f"This is not a valid ZIM file ({exc}).") from exc
         del archive
+        if check:
+            check()
         stem, _ = split_filename(target.name)
         previous = self.db.one("SELECT path FROM books WHERE id = ?", (stem,))
         self.pool.invalidate(str(target))
-        temporary = target.with_name(target.name + ".tmp")
-        shutil.copyfile(made, temporary)
-        temporary.replace(target)
         if move:
-            made.unlink(missing_ok=True)
+            try:
+                made.replace(target)
+            except OSError:
+                temporary = target.with_name(target.name + ".tmp")
+                shutil.copyfile(made, temporary)
+                temporary.replace(target)
+                made.unlink(missing_ok=True)
+        else:
+            temporary = target.with_name(target.name + ".tmp")
+            shutil.copyfile(made, temporary)
+            temporary.replace(target)
         self._retire(previous, target)
         self.scanner.scan()
         size = target.stat().st_size

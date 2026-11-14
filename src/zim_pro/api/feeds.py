@@ -21,6 +21,15 @@ router = APIRouter(prefix="/api/feeds", dependencies=[Depends(require_admin)])
 
 ITEM_STATES = ("saved", "new", "failed", "skipped", "dropped")
 LOOK_TIMEOUT = 30  # seconds one address may take to answer in full, when checking it
+CHECK_MAX_BYTES = 5 * 1024 * 1024
+CHECK_OVERALL_TIMEOUT = 60
+
+
+def _clean_addresses(text: str, what: str) -> list[str]:
+    try:
+        return clean_addresses(text, what)
+    except ValueError as exc:
+        raise HTTPException(422, f"Invalid {what} address: {exc}") from exc
 
 
 class FeedBody(BaseModel):
@@ -48,7 +57,7 @@ def _clean(body: FeedBody) -> tuple[dict[str, Any], list[str]]:
         raise HTTPException(422, f"rate_unit must be one of {', '.join(RATE_UNITS)}")
     if 0 < body.interval_minutes < 5:
         raise HTTPException(422, "A feed cannot be checked more often than every 5 minutes.")
-    sources = clean_addresses(body.sources, "feed")
+    sources = _clean_addresses(body.sources, "feed")
     if not sources:
         raise HTTPException(422, "Add at least one feed address.")
     data = body.model_dump(exclude={"sources"})
@@ -78,7 +87,13 @@ def _feeds(ctx: Context) -> list[dict[str, Any]]:
         row["counts"] = counts.get(row["id"], {})
         due = row["enabled"] and row["interval_minutes"] > 0
         row["next_sync"] = (
-            (row["last_attempt"] or row["created"]) + row["interval_minutes"] * 60 if due else None
+            (
+                row["last_attempt"] + row["interval_minutes"] * 60
+                if row["last_attempt"] is not None
+                else row["created"]
+            )
+            if due
+            else None
         )
     return rows
 
@@ -137,16 +152,19 @@ def edit_feed(feed_id: int, body: FeedBody, ctx: Context = Depends(get_context))
 @router.delete("/{feed_id}")
 def delete_feed(feed_id: int, ctx: Context = Depends(get_context)) -> dict[str, Any]:
     """Remove a collection and what was kept for it; its ZIM stays in the library."""
-    busy = ctx.db.one(
-        "SELECT id FROM builds WHERE kind = 'feed' AND source_id = ? "
-        "AND state IN ('queued', 'processing', 'paused')",
-        (feed_id,),
-    )
-    if busy:
-        raise HTTPException(409, "This collection is being synced. Cancel the sync first.")
-    for table in ("feed_items", "feed_sources"):
-        ctx.db.execute(f"DELETE FROM {table} WHERE feed_id = ?", (feed_id,))
-    ctx.db.execute("DELETE FROM feeds WHERE id = ?", (feed_id,))
+    with ctx.db.transaction():
+        if ctx.db.one("SELECT id FROM feeds WHERE id = ?", (feed_id,)) is None:
+            raise HTTPException(404, "No such feed collection")
+        busy = ctx.db.one(
+            "SELECT id FROM builds WHERE kind = 'feed' AND source_id = ? "
+            "AND state IN ('queued', 'processing', 'paused')",
+            (feed_id,),
+        )
+        if busy:
+            raise HTTPException(409, "This collection is being synced. Cancel the sync first.")
+        for table in ("feed_items", "feed_sources"):
+            ctx.db.execute(f"DELETE FROM {table} WHERE feed_id = ?", (feed_id,))
+        ctx.db.execute("DELETE FROM feeds WHERE id = ?", (feed_id,))
     ctx.feeds.forget(feed_id)
     icons.path(ctx.config.state_dir, "feed", feed_id).unlink(missing_ok=True)
     _refile(ctx)
@@ -196,8 +214,10 @@ def list_items(
     """The articles of a collection, newest first."""
     if state and state not in ITEM_STATES:
         raise HTTPException(422, f"state must be one of {', '.join(ITEM_STATES)}")
-    where = "i.feed_id = ? AND (? = '' OR i.state = ?) AND (? = '' OR i.title LIKE ?)"
-    args = (feed_id, state, state, q.strip(), f"%{q.strip()}%")
+    query = q.strip()
+    escaped_q = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    where = "i.feed_id = ? AND (? = '' OR i.state = ?) AND (? = '' OR i.title LIKE ? ESCAPE '\\')"
+    args = (feed_id, state, state, query, f"%{escaped_q}%")
     rows = ctx.db.all(
         "SELECT i.id, i.url, i.title, i.author, i.published, i.state, i.error, i.path, "
         "s.title AS source FROM feed_items i LEFT JOIN feed_sources s ON s.id = i.source_id "
@@ -210,12 +230,15 @@ def list_items(
 
 @router.post("/{feed_id}/retry-failed")
 def retry_failed(feed_id: int, ctx: Context = Depends(get_context)) -> dict[str, Any]:
-    ctx.db.execute(
-        "UPDATE feed_items SET state = 'new', tries = 0, error = NULL "
-        "WHERE feed_id = ? AND state = 'failed'",
-        (feed_id,),
-    )
-    return _sync(ctx, feed_id)
+    with ctx.db.transaction():
+        if ctx.db.one("SELECT id FROM feeds WHERE id = ?", (feed_id,)) is None:
+            raise HTTPException(404, "No such feed collection")
+        ctx.db.execute(
+            "UPDATE feed_items SET state = 'new', tries = 0, error = NULL "
+            "WHERE feed_id = ? AND state = 'failed'",
+            (feed_id,),
+        )
+        return _sync(ctx, feed_id)
 
 
 # -- finding and moving feeds -----------------------------------------------------------
@@ -227,16 +250,27 @@ class CheckBody(BaseModel):
 
 async def _look(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
     try:
-        async with asyncio.timeout(LOOK_TIMEOUT):
-            reply = await client.get(url)
+        async with asyncio.timeout(LOOK_TIMEOUT), client.stream("GET", url) as reply:
+            if reply.status_code >= 400:
+                raise HTTPException(422, f"{url} answered HTTP {reply.status_code}")
+            length = reply.headers.get("content-length")
+            if length and length.isdigit() and int(length) > CHECK_MAX_BYTES:
+                raise HTTPException(422, f"{url} is too large to check")
+            chunks: list[bytes] = []
+            size = 0
+            async for chunk in reply.aiter_bytes():
+                size += len(chunk)
+                if size > CHECK_MAX_BYTES:
+                    raise HTTPException(422, f"{url} is too large to check")
+                chunks.append(chunk)
+            content = b"".join(chunks)
+            final_url = str(reply.url)
+            kind = reply.headers.get("content-type", "")
     except TimeoutError:
         raise HTTPException(422, f"{url} did not answer within {LOOK_TIMEOUT} seconds") from None
-    if reply.status_code >= 400:
-        raise HTTPException(422, f"{url} answered HTTP {reply.status_code}")
-    kind = reply.headers.get("content-type", "")
     try:
-        feed = parse.parse(reply.content, str(reply.url))
-    except parse.NotAFeed:
+        feed = parse.parse(content, final_url)
+    except (parse.NotAFeed, ValueError):
         feed = None
     if feed is not None and (feed.entries or "html" not in kind):
         return {
@@ -246,22 +280,25 @@ async def _look(client: httpx.AsyncClient, url: str) -> dict[str, Any]:
             "latest": [entry.title for entry in feed.entries[:3]],
             "full_text": any(len(entry.html) > 1500 for entry in feed.entries),
         }
-    return {"url": url, "page": _decode(reply.content), "final": str(reply.url)}
+    return {"url": url, "page": _decode(content), "final": final_url}
 
 
 @router.post("/check")
 async def check(body: CheckBody, ctx: Context = Depends(get_context)) -> dict[str, Any]:
     """Look at an address: is it a feed, or a page that says where its feeds are?"""
-    url = "".join(clean_addresses(body.url, "feed")[:1])
+    url = "".join(_clean_addresses(body.url, "feed")[:1])
     proxy = ctx.network.proxy or None
+    found: list[dict[str, Any]] = []
     try:
-        async with httpx.AsyncClient(
-            headers={"User-Agent": USER_AGENT}, follow_redirects=True, timeout=20, proxy=proxy
-        ) as client:
+        async with (
+            asyncio.timeout(CHECK_OVERALL_TIMEOUT),
+            httpx.AsyncClient(
+                headers={"User-Agent": USER_AGENT}, follow_redirects=True, timeout=20, proxy=proxy
+            ) as client,
+        ):
             first = await _look(client, url)
             if "page" not in first:
                 return {"feeds": [first]}
-            found = []
             for address in parse.discover(first["page"], first["final"])[:6]:
                 try:
                     seen = await _look(client, address)
@@ -269,6 +306,11 @@ async def check(body: CheckBody, ctx: Context = Depends(get_context)) -> dict[st
                     continue
                 if "page" not in seen:
                     found.append(seen)
+    except TimeoutError:
+        if not found:
+            raise HTTPException(
+                422, f"Checking {url} timed out after {CHECK_OVERALL_TIMEOUT} seconds."
+            ) from None
     except httpx.HTTPError as exc:
         raise HTTPException(
             422, f"{url} could not be reached: {exc or type(exc).__name__}"
@@ -294,7 +336,7 @@ class OpmlBody(BaseModel):
 def _opml_folders(text: str) -> list[tuple[str, list[tuple[str, str]]]]:
     try:
         folders = parse.read_opml(text)
-    except parse.NotAFeed as exc:
+    except (parse.NotAFeed, ValueError) as exc:
         raise HTTPException(422, str(exc)) from exc
     if not folders:
         raise HTTPException(422, "This OPML file lists no feeds.")
@@ -368,13 +410,17 @@ def import_opml(body: OpmlBody, ctx: Context = Depends(get_context)) -> dict[str
 
 @router.get("/opml")
 def export_opml(ctx: Context = Depends(get_context)) -> Response:
-    folders = [
-        (
-            feed["title"] or "Feeds",
-            [(s["title"] or s["url"], s["url"], s["site"]) for s in feed["sources"]],
+    seen: dict[str, int] = {}
+    folders = []
+    for feed in _feeds(ctx):
+        base = feed["title"] or "Feeds"
+        key = base.lower()
+        count = seen.get(key, 0) + 1
+        seen[key] = count
+        name = base if count == 1 else f"{base} ({count})"
+        folders.append(
+            (name, [(s["title"] or s["url"], s["url"], s["site"]) for s in feed["sources"]])
         )
-        for feed in _feeds(ctx)
-    ]
     headers = {"Content-Disposition": 'attachment; filename="zim-pro-feeds.opml"'}
     return Response(parse.write_opml(folders), media_type="text/x-opml", headers=headers)
 

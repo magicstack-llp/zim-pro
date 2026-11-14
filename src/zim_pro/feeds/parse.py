@@ -1,9 +1,10 @@
 """Reading feeds: RSS, Atom and RDF, and finding the feeds a web page advertises."""
 
 import calendar
-import time
 import xml.etree.ElementTree as ElementTree
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
+from email.utils import format_datetime
 
 import feedparser
 from selectolax.lexbor import LexborHTMLParser as HTMLParser
@@ -11,6 +12,13 @@ from selectolax.lexbor import LexborHTMLParser as HTMLParser
 from ..builder import extract
 
 _FEED_TYPES = ("application/rss+xml", "application/atom+xml", "application/rdf+xml")
+
+
+def _safe_normalise(url: str, base: str = "") -> str:
+    try:
+        return extract.normalise(url, base)
+    except ValueError:
+        return ""
 
 
 @dataclass
@@ -29,6 +37,7 @@ class Feed:
     site: str = ""  # the website the feed belongs to
     language: str = ""
     entries: list[Entry] = field(default_factory=list)
+    skipped: int = 0
 
 
 class NotAFeed(Exception):
@@ -43,14 +52,18 @@ def parse(data: bytes, url: str) -> Feed:
     info = parsed.feed
     feed = Feed(
         title=" ".join(str(info.get("title", "")).split())[:200],
-        site=extract.normalise(str(info.get("link", "")), url),
+        site=_safe_normalise(str(info.get("link", "")), url),
         language=str(info.get("language", ""))[:10],
     )
     seen: set[str] = set()
     for item in parsed.entries:
-        link = extract.normalise(str(item.get("link", "")), url)
-        guid = link or str(item.get("id", "")).strip()
-        if not guid or guid in seen:
+        raw_link = str(item.get("link", "")).strip()
+        link = _safe_normalise(raw_link, url) if raw_link else ""
+        guid = (link or str(item.get("id", "")).strip())[:1000]
+        if not guid:
+            feed.skipped += 1
+            continue
+        if guid in seen:
             continue
         seen.add(guid)
         body = ""
@@ -61,7 +74,7 @@ def parse(data: bytes, url: str) -> Feed:
         when = item.get("published_parsed") or item.get("updated_parsed")
         feed.entries.append(
             Entry(
-                guid=guid[:1000],
+                guid=guid,
                 url=link,
                 title=" ".join(str(item.get("title", "")).split())[:300] or link or "Untitled",
                 author=str(item.get("author", ""))[:200],
@@ -77,7 +90,7 @@ def discover(html: str, url: str) -> list[str]:
     found: list[str] = []
     for node in HTMLParser(html).css("link[rel~=alternate][href]"):
         if (node.attributes.get("type") or "").lower() in _FEED_TYPES:
-            address = extract.normalise(node.attributes.get("href") or "", url)
+            address = _safe_normalise(node.attributes.get("href") or "", url)
             if address and address not in found:
                 found.append(address)
     return found
@@ -89,25 +102,34 @@ def read_opml(text: str) -> list[tuple[str, list[tuple[str, str]]]]:
         root = ElementTree.fromstring(text.strip())
     except ElementTree.ParseError as exc:
         raise NotAFeed(f"this is not an OPML file ({exc})") from exc
+    for element in root.iter():
+        if "}" in element.tag:
+            element.tag = element.tag.split("}", 1)[1]
     body = root.find("body")
     loose: list[tuple[str, str]] = []
     folders: list[tuple[str, list[tuple[str, str]]]] = []
 
-    def feeds_under(node) -> list[tuple[str, str]]:
-        result = []
-        for outline in node.iter("outline"):
-            address = extract.normalise(outline.get("xmlUrl") or "")
+    def walk(node: ElementTree.Element, folder_name: str = "") -> None:
+        direct: list[tuple[str, str]] = []
+        children: list[tuple[ElementTree.Element, str]] = []
+        for child in node:
+            if child.tag != "outline":
+                continue
+            address = _safe_normalise(child.get("xmlUrl") or "")
             if address:
-                result.append((outline.get("title") or outline.get("text") or "", address))
-        return result
+                direct.append((child.get("title") or child.get("text") or "", address))
+            elif not child.get("xmlUrl"):
+                children.append((child, child.get("title") or child.get("text") or "Feeds"))
+        if direct:
+            if folder_name:
+                folders.append((folder_name, direct))
+            else:
+                loose.extend(direct)
+        for child, sub_name in children:
+            walk(child, sub_name)
 
-    for outline in body if body is not None else []:
-        if outline.get("xmlUrl"):
-            loose.extend(feeds_under(outline))
-        else:
-            inside = feeds_under(outline)
-            if inside:
-                folders.append((outline.get("title") or outline.get("text") or "Feeds", inside))
+    if body is not None:
+        walk(body)
     return ([("", loose)] if loose else []) + folders
 
 
@@ -116,7 +138,9 @@ def write_opml(folders: list[tuple[str, list[tuple[str, str, str]]]]) -> str:
     root = ElementTree.Element("opml", version="2.0")
     head = ElementTree.SubElement(root, "head")
     ElementTree.SubElement(head, "title").text = "Zim Pro feeds"
-    ElementTree.SubElement(head, "dateCreated").text = time.strftime("%a, %d %b %Y %H:%M:%S GMT")
+    ElementTree.SubElement(head, "dateCreated").text = format_datetime(
+        datetime.now(UTC), usegmt=True
+    )
     body = ElementTree.SubElement(root, "body")
     for name, feeds in folders:
         folder = ElementTree.SubElement(body, "outline", text=name, title=name)

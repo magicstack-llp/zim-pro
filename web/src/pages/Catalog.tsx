@@ -33,8 +33,9 @@ export default function Catalog() {
   const status = useData<Status>("/api/status");
   const facets = useData<Facets>("/api/catalog/facets");
   const query = new URLSearchParams({ q, language: lang, category, sort, start: String(page * PAGE), count: String(PAGE) });
+  const downloadKey = downloads.map((d) => `${d.id}:${d.state}`).join();
   const { data, error, reload } = useData<{ total: number; results: CatalogEntry[] }>(`/api/catalog?${query}`, [
-    downloads.length,
+    downloadKey,
   ]);
 
   const run = async (action: () => Promise<unknown>) => {

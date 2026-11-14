@@ -14,8 +14,14 @@ def resolve_link(article_path: str, href: str) -> str | None:
     parts = urlsplit(href)
     if parts.scheme or parts.netloc or not parts.path:
         return None
-    joined = posixpath.normpath(posixpath.join(posixpath.dirname(article_path), parts.path))
-    return None if joined.startswith("..") else unquote(joined)
+    raw_path = unquote(parts.path)
+    if raw_path.startswith("/"):
+        joined = posixpath.normpath(raw_path.lstrip("/"))
+    else:
+        joined = posixpath.normpath(posixpath.join(posixpath.dirname(article_path), raw_path))
+    if joined in ("", ".", "..") or joined.startswith("../") or joined.startswith("/"):
+        return None
+    return joined
 
 
 # Sections that hold no prose: lists of links and citations.

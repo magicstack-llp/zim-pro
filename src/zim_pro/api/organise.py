@@ -1,6 +1,8 @@
 """Filing the ZIMs made here: the list of categories, and a picture for each source."""
 
+import asyncio
 import re
+import sqlite3
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -43,7 +45,7 @@ def library_categories(ctx: Context) -> list[dict[str, Any]]:
     own = {r["name"].lower() for r in ctx.db.all("SELECT name FROM categories")}
     rows = ctx.db.all(
         "SELECT category AS name, COUNT(*) AS books FROM books WHERE error IS NULL "
-        "GROUP BY category ORDER BY category COLLATE NOCASE"
+        "GROUP BY category COLLATE NOCASE ORDER BY category COLLATE NOCASE"
     )
     return [r for r in rows if r["name"].lower() not in own and r["name"] not in ("custom", "")]
 
@@ -98,9 +100,11 @@ def add_category(body: CategoryBody, ctx: Context = Depends(get_context)) -> dic
     name = clean_category(body.name)
     if not name:
         raise HTTPException(422, "Type a name for the category.")
-    if ctx.db.one("SELECT name FROM categories WHERE name = ?", (name,)):
-        raise HTTPException(409, f"There is already a category named “{name}”.")
-    ctx.db.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+    try:
+        with ctx.db.transaction():
+            ctx.db.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+    except sqlite3.IntegrityError:
+        raise HTTPException(409, f"There is already a category named “{name}”.") from None
     return _listing(ctx)
 
 
@@ -114,34 +118,40 @@ def rename_category(
     name: str, body: CategoryBody, ctx: Context = Depends(get_context)
 ) -> dict[str, Any]:
     """Rename a category; everything filed under it moves with it."""
-    old = ctx.db.one("SELECT name FROM categories WHERE name = ?", (name,))
-    if old is None:
-        raise HTTPException(404, "No such category")
     new = clean_category(body.name)
     if not new:
         raise HTTPException(422, "Type a name for the category.")
-    clash = ctx.db.one("SELECT name FROM categories WHERE name = ?", (new,))
-    if clash and clash["name"].lower() != old["name"].lower():
-        raise HTTPException(409, f"There is already a category named “{new}”.")
-    ctx.db.execute("UPDATE categories SET name = ? WHERE name = ?", (new, old["name"]))
-    for table in SOURCE_TABLES:
-        ctx.db.execute(
-            f"UPDATE {table} SET category = ? WHERE category = ? COLLATE NOCASE",
-            (new, old["name"]),
-        )
-    _refile(ctx)
+    with ctx.db.transaction():
+        old = ctx.db.one("SELECT name FROM categories WHERE name = ?", (name,))
+        if old is None:
+            raise HTTPException(404, "No such category")
+        clash = ctx.db.one("SELECT name FROM categories WHERE name = ?", (new,))
+        if clash and clash["name"].lower() != old["name"].lower():
+            raise HTTPException(409, f"There is already a category named “{new}”.")
+        ctx.db.execute("UPDATE categories SET name = ? WHERE name = ?", (new, old["name"]))
+        for table in SOURCE_TABLES:
+            ctx.db.execute(
+                f"UPDATE {table} SET category = ? WHERE category = ? COLLATE NOCASE",
+                (new, old["name"]),
+            )
+        file_under_categories(ctx.db)
+    ctx.events.publish("library", {"changed": True})
     return _listing(ctx)
 
 
 @router.delete("/categories/{name}", dependencies=[Depends(require_admin)])
 def delete_category(name: str, ctx: Context = Depends(get_context)) -> dict[str, Any]:
     """Remove a category; what was filed under it goes back to "My ZIMs"."""
-    ctx.db.execute("DELETE FROM categories WHERE name = ?", (name,))
-    for table in SOURCE_TABLES:
-        ctx.db.execute(
-            f"UPDATE {table} SET category = '' WHERE category = ? COLLATE NOCASE", (name,)
-        )
-    _refile(ctx)
+    with ctx.db.transaction():
+        cur = ctx.db.execute("DELETE FROM categories WHERE name = ?", (name,))
+        if cur.rowcount == 0:
+            raise HTTPException(404, "No such category")
+        for table in SOURCE_TABLES:
+            ctx.db.execute(
+                f"UPDATE {table} SET category = '' WHERE category = ? COLLATE NOCASE", (name,)
+            )
+        file_under_categories(ctx.db)
+    ctx.events.publish("library", {"changed": True})
     return _listing(ctx)
 
 
@@ -173,18 +183,22 @@ async def set_icon(
     kind: str, source_id: int, file: UploadFile, ctx: Context = Depends(get_context)
 ) -> dict[str, Any]:
     """Choose a picture; it goes into the ZIM the next time the ZIM is made."""
-    table = _source(ctx, kind, source_id)
+    table = await asyncio.to_thread(_source, ctx, kind, source_id)
     data = await file.read(icons.MAX_BYTES + 1)
     if len(data) > icons.MAX_BYTES:
         raise HTTPException(413, "The picture is larger than 10 MB.")
-    try:
+
+    def _save() -> None:
         picture = icons.normalise(data)
+        target = icons.path(ctx.config.state_dir, kind, source_id)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(picture)
+        ctx.db.execute(f"UPDATE {table} SET icon = unixepoch('subsec') WHERE id = ?", (source_id,))
+
+    try:
+        await asyncio.to_thread(_save)
     except BuildError as exc:
         raise HTTPException(415, str(exc)) from exc
-    target = icons.path(ctx.config.state_dir, kind, source_id)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_bytes(picture)
-    ctx.db.execute(f"UPDATE {table} SET icon = unixepoch('subsec') WHERE id = ?", (source_id,))
     return {"ok": True}
 
 

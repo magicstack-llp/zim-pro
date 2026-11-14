@@ -1,11 +1,15 @@
 """Logs, monitoring and the queues, as the Settings sections show them."""
 
+import asyncio
+import json
 import logging
 import time
+from collections.abc import Iterator
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 from .. import logs
@@ -43,23 +47,38 @@ def read_logs(
     }
 
 
+def _iter_log_files(files: list[Path]) -> Iterator[bytes]:
+    for path in files:
+        try:
+            with path.open("rb") as handle:
+                carry = b""
+                while chunk := handle.read(65536):
+                    data = carry + chunk
+                    nl = data.rfind(b"\n")
+                    if nl == -1:
+                        carry = data
+                    else:
+                        yield data[: nl + 1]
+                        carry = data[nl + 1 :]
+        except OSError:
+            continue
+
+
 @router.get("/logs/download", dependencies=[Depends(require_admin)])
 def download_logs() -> Response:
     """Every line still in the log files (or in memory), one JSON object a line."""
     files = logs.hub.files()
-    if files:
-        body = b"".join(file.read_bytes() for file in files)
-    else:
-        import json
-
-        lines = reversed(logs.hub.query(limit=logs.KEEP))
-        body = "".join(json.dumps(line) + "\n" for line in lines).encode()
     stamp = time.strftime("%Y%m%d-%H%M%S")
-    return Response(
-        body,
-        media_type="application/x-ndjson",
-        headers={"Content-Disposition": f'attachment; filename="zim-pro-logs-{stamp}.jsonl"'},
-    )
+    headers = {"Content-Disposition": f'attachment; filename="zim-pro-logs-{stamp}.jsonl"'}
+    if files:
+        return StreamingResponse(
+            _iter_log_files(files),
+            media_type="application/x-ndjson",
+            headers=headers,
+        )
+    lines = reversed(logs.hub.query(limit=logs.KEEP))
+    body = "".join(json.dumps(line) + "\n" for line in lines).encode()
+    return Response(body, media_type="application/x-ndjson", headers=headers)
 
 
 @router.post("/logs/clear", dependencies=[Depends(require_admin)])
@@ -77,7 +96,7 @@ def clear_logs() -> dict[str, bool]:
 async def monitor(span: str = "1h", ctx: Context = Depends(get_context)) -> dict[str, Any]:
     assert ctx.monitor is not None
     network = await ctx.network.status()
-    return ctx.monitor.snapshot(network, "24h" if span == "24h" else "1h")
+    return await asyncio.to_thread(ctx.monitor.snapshot, network, "24h" if span == "24h" else "1h")
 
 
 # -- queues -------------------------------------------------------------------------------
@@ -171,7 +190,7 @@ def _queue(ctx: Context, name: str) -> dict[str, Any]:
             "started": row["started"],
             "running_for": now - row["started"] if row["started"] else None,
             "quiet_for": quiet,
-            "stalled": bool(ctx.monitor and key in ctx.monitor.stalled),
+            "stalled": bool(ctx.monitor and ctx.monitor.is_stalled(key)),
         }
         if name == "downloads":
             entry.update(
@@ -322,6 +341,9 @@ def job_action(
     manager = _manager(ctx, name)
     if action not in JOB_ACTIONS:
         raise HTTPException(404, "No such action.")
+    spec = QUEUES[name]
+    if not ctx.db.one(f"SELECT 1 FROM {spec['table']} WHERE id = ? AND {spec['where']}", (job_id,)):
+        raise HTTPException(404, "No such job in this queue.")
     try:
         if action in ("top", "up", "down", "bottom"):
             manager.place(job_id, action)

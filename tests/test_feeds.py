@@ -66,15 +66,6 @@ class News:
         return httpx.Response(404)
 
 
-@pytest.fixture
-def no_waiting(monkeypatch):
-    real_sleep = asyncio.sleep
-    monkeypatch.setattr(asyncio, "sleep", lambda _seconds: real_sleep(0))
-    monkeypatch.setattr("zim_pro.builder.crawler.HOST_DELAY", 0)
-    monkeypatch.setattr("zim_pro.builder.crawler.SLOW_DELAY_MIN", 0)
-    monkeypatch.setattr("zim_pro.builder.crawler.RATE_WAIT", 0)
-
-
 def manager(tmp_path, site) -> FeedManager:
     db = Database(":memory:")
     pool = ArchivePool()
@@ -494,7 +485,15 @@ def api(tmp_path):
     from zim_pro.config import Config
     from zim_pro.main import create_app
 
-    return TestClient(create_app(Config(data_dir=tmp_path / "data", state_dir=tmp_path / "state")))
+    app = create_app(
+        Config(
+            data_dir=tmp_path / "data",
+            state_dir=tmp_path / "state",
+            catalog_url="http://127.0.0.1:0/catalog.xml",
+        )
+    )
+    with TestClient(app) as client:
+        yield client
 
 
 def test_opml_preview_shows_folders_and_adds_nothing(api):
@@ -526,3 +525,423 @@ def test_opml_import_can_put_everything_in_one_collection(api):
     assert [(f["title"], len(f["sources"])) for f in reply["feeds"]] == [("Everything", 4)]
     assert api.post("/api/feeds/opml", json={"text": OPML, "folders": []}).status_code == 422
     assert api.post("/api/feeds/opml", json={"text": "<opml/>"}).status_code == 422
+
+
+# -- r1 review fixes ---------------------------------------------------------------------
+
+
+def _make_sync(tmp_path, site, *, keep: int = 0, full_text: bool = True, workers: int = 4):
+    from zim_pro.feeds.sync import FeedSync
+
+    db = Database(":memory:")
+    db.execute(
+        "INSERT INTO feeds (id, title, interval_minutes, keep, full_text) VALUES (1, '', 60, ?, ?)",
+        (keep, int(full_text)),
+    )
+    db.execute("INSERT INTO feed_sources (feed_id, url) VALUES (1, 'https://news.test/feed.xml')")
+    feed = db.one("SELECT * FROM feeds WHERE id = 1")
+    stage = Stage(tmp_path / "stage")
+    report = Reporter()
+    sync = FeedSync(
+        db,
+        feed,
+        tmp_path / "store",
+        stage,
+        report,
+        workers=workers,
+        transport=httpx.MockTransport(site),
+    )
+    return db, sync
+
+
+def test_f1_f17_parse_malformed_url_long_guid_and_identityless():
+    bad_rss = (
+        '<?xml version="1.0"?><rss version="2.0"><channel><title>T</title>'
+        "<item><title>Good</title><link>https://news.test/ok</link></item>"
+        "<item><title>BadUrl</title><link>http://[bad/</link></item>"
+        "<item><title>NoId</title></item>"
+        f"<item><title>L1</title><guid>{'x' * 1005}a</guid></item>"
+        f"<item><title>L2</title><guid>{'x' * 1005}b</guid></item>"
+        "</channel></rss>"
+    )
+    parsed = parse.parse(bad_rss.encode(), "https://news.test/feed.xml")
+    # BadUrl has no link (normalise -> "") and no id, so both BadUrl and NoId are skipped.
+    assert [e.title for e in parsed.entries] == ["Good", "L1"]
+    assert parsed.skipped == 2
+
+
+def test_f1_opml_and_check_malformed_url_return_422(api):
+    bad_opml = '<opml><body><outline text="Bad" xmlUrl="http://[bad/"/></body></opml>'
+    assert api.post("/api/feeds/opml", json={"text": bad_opml}).status_code == 422
+    assert api.post("/api/feeds/check", json={"url": "http://[bad/"}).status_code == 422
+
+
+def test_f10_opml_namespace_nested_folders_utc_and_duplicate_export(api):
+    ns_opml = (
+        '<?xml version="1.0"?>'
+        '<opml xmlns="http://opml.org/spec2" version="2.0">'
+        "<body>"
+        '<outline text="Tech">'
+        '  <outline text="Linux" xmlUrl="https://linux.test/rss"/>'
+        '  <outline text="AI">'
+        '    <outline text="ML" xmlUrl="https://ml.test/rss"/>'
+        "  </outline>"
+        "</outline>"
+        "</body></opml>"
+    )
+    folders = parse.read_opml(ns_opml)
+    assert folders == [
+        ("Tech", [("Linux", "https://linux.test/rss")]),
+        ("AI", [("ML", "https://ml.test/rss")]),
+    ]
+    exported = parse.write_opml([])
+    assert "GMT</dateCreated>" in exported
+
+    # Duplicate collection titles get disambiguated on export.
+    api.post("/api/feeds", json={"title": "Dup", "sources": "https://a.test/rss", "enabled": False})
+    api.post("/api/feeds", json={"title": "Dup", "sources": "https://b.test/rss", "enabled": False})
+    opml_out = api.get("/api/feeds/opml").text
+    exported_folders = [name for name, _ in parse.read_opml(opml_out)]
+    assert exported_folders == ["Dup", "Dup (2)"]
+
+
+async def test_f2_f3_keep_respects_saved_count_reports_dropped_and_revives(tmp_path, no_waiting):
+    site = News()
+    site.add("Two", "two", "Tue, 06 Oct 2026 10:00:00 GMT")
+    site.add("Three", "three", "Wed, 07 Oct 2026 10:00:00 GMT")
+    db, sync = _make_sync(tmp_path / "r1", site, keep=2)
+    meta, out1 = await sync.run()
+    assert meta is not None and out1["new"] == 2 and out1["dropped"] == 1
+
+    # Add 3 more articles while 2 are already saved and keep=2: only 2 fetched, 3 dropped total.
+    site.asked.clear()
+    site.add("Four", "four", "Thu, 08 Oct 2026 10:00:00 GMT")
+    site.add("Five", "five", "Fri, 09 Oct 2026 10:00:00 GMT")
+    site.add("Six", "six", "Sat, 10 Oct 2026 10:00:00 GMT")
+    db.execute("UPDATE feeds SET keep = 2")
+    feed = db.one("SELECT * FROM feeds WHERE id = 1")
+    from zim_pro.feeds.sync import FeedSync
+
+    sync2 = FeedSync(
+        db,
+        feed,
+        tmp_path / "r1" / "store",
+        Stage(tmp_path / "s2"),
+        Reporter(),
+        transport=httpx.MockTransport(site),
+    )
+    _, out2 = await sync2.run()
+    assert out2["new"] == 2 and out2["dropped"] == 3
+    assert "/four" not in site.asked
+
+    # Raising keep to 0 revives all previously dropped articles.
+    db.execute("UPDATE feeds SET keep = 0")
+    feed = db.one("SELECT * FROM feeds WHERE id = 1")
+    sync3 = FeedSync(
+        db,
+        feed,
+        tmp_path / "r1" / "store",
+        Stage(tmp_path / "s3"),
+        Reporter(),
+        transport=httpx.MockTransport(site),
+    )
+    _, out3 = await sync3.run()
+    assert out3["articles"] == 6 and out3["new"] == 4
+
+
+async def test_f4_language_persists_when_declaring_source_fails(tmp_path, no_waiting):
+    from zim_pro.feeds.sync import FeedSync
+
+    fail_fr = False
+
+    def site(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/fr.xml":
+            if fail_fr:
+                return httpx.Response(503)
+            rss = RSS.replace("<language>en</language>", "<language>fr</language>").format(
+                items=ITEM.format(
+                    title="Un", slug="un", date="Mon, 05 Oct 2026 10:00:00 GMT", extra=""
+                )
+            )
+            return httpx.Response(200, content=rss, headers={"content-type": "application/rss+xml"})
+        if request.url.path == "/en.xml":
+            rss = RSS.format(
+                items=ITEM.format(
+                    title="Two", slug="two", date="Tue, 06 Oct 2026 10:00:00 GMT", extra=""
+                )
+            )
+            return httpx.Response(200, content=rss, headers={"content-type": "application/rss+xml"})
+        return httpx.Response(
+            200, content=article("Art", "Body text " * 8), headers={"content-type": "text/html"}
+        )
+
+    db = Database(":memory:")
+    db.execute("INSERT INTO feeds (id, title, interval_minutes) VALUES (1, '', 60)")
+    db.execute("INSERT INTO feed_sources (feed_id, url) VALUES (1, 'https://news.test/fr.xml')")
+    db.execute("INSERT INTO feed_sources (feed_id, url) VALUES (1, 'https://news.test/en.xml')")
+    sync1 = FeedSync(
+        db,
+        db.one("SELECT * FROM feeds WHERE id = 1"),
+        tmp_path / "store",
+        Stage(tmp_path / "s1"),
+        Reporter(),
+        transport=httpx.MockTransport(site),
+    )
+    meta1, _ = await sync1.run()
+    assert meta1 is not None and meta1.language == "fra"
+    assert db.one("SELECT language FROM feeds WHERE id = 1")["language"] == "fr"
+
+    fail_fr = True
+    sync2 = FeedSync(
+        db,
+        db.one("SELECT * FROM feeds WHERE id = 1"),
+        tmp_path / "store",
+        Stage(tmp_path / "s2"),
+        Reporter(),
+        rebuild=True,
+        transport=httpx.MockTransport(site),
+    )
+    meta2, _ = await sync2.run()
+    assert meta2 is not None and meta2.language == "fra"
+
+
+def test_f5_concurrent_sync_enqueues_once(tmp_path):
+    from concurrent.futures import ThreadPoolExecutor
+
+    feeds = manager(tmp_path, News())
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        results = list(pool.map(lambda _: _try_sync(feeds, 1), range(4)))
+    assert sum(1 for r in results if r is not None) == 1
+    assert feeds.db.scalar("SELECT COUNT(*) FROM builds WHERE kind = 'feed' AND source_id = 1") == 1
+
+
+def _try_sync(feeds: FeedManager, feed_id: int):
+    from zim_pro.builder.writer import BuildError
+
+    try:
+        return feeds.sync(feed_id)
+    except BuildError:
+        return None
+
+
+def test_f6_f14_f18_f19_api_delete_retry_next_sync_and_like_escape(api):
+    created = api.post(
+        "/api/feeds",
+        json={"title": "News", "sources": "https://news.test/feed.xml", "enabled": True},
+        params={"hold": "true"},
+    ).json()
+    feed_id = created["id"]
+    # F18: never-synced feed has next_sync <= now (due immediately).
+    assert created["feeds"][0]["next_sync"] <= time.time() + 1
+
+    # F14: unknown feed -> 404; busy feed -> 409 with failed item unchanged.
+    assert api.post("/api/feeds/9999/retry-failed").status_code == 404
+
+    ctx = api.app.state.ctx
+    ctx.db.execute(
+        "INSERT INTO feed_items (feed_id, guid, title, state, tries) "
+        "VALUES (?, 'g1', '100% Real', 'failed', 3)",
+        (feed_id,),
+    )
+    ctx.db.execute(
+        "INSERT INTO feed_items (feed_id, guid, title, state) VALUES (?, 'g2', 'Other', 'saved')",
+        (feed_id,),
+    )
+    # F19: LIKE wildcard % is escaped.
+    items = api.get(f"/api/feeds/{feed_id}/items", params={"q": "%"}).json()["items"]
+    assert [i["title"] for i in items] == ["100% Real"]
+
+    # Active build -> retry-failed returns 409 without mutating item; delete returns 409.
+    ctx.db.execute(
+        "INSERT INTO builds (kind, source_id, title, state) VALUES ('feed', ?, 'News', 'queued')",
+        (feed_id,),
+    )
+    assert api.post(f"/api/feeds/{feed_id}/retry-failed").status_code == 409
+    assert ctx.db.one("SELECT state FROM feed_items WHERE guid = 'g1'")["state"] == "failed"
+    assert api.delete(f"/api/feeds/{feed_id}").status_code == 409
+
+    # Clear active build -> delete removes feed and cascades items/sources.
+    ctx.db.execute("DELETE FROM builds WHERE source_id = ?", (feed_id,))
+    assert api.delete(f"/api/feeds/{feed_id}").status_code == 200
+    assert ctx.db.scalar("SELECT COUNT(*) FROM feed_items WHERE feed_id = ?", (feed_id,)) == 0
+    assert ctx.db.scalar("SELECT COUNT(*) FROM feed_sources WHERE feed_id = ?", (feed_id,)) == 0
+
+
+async def test_f7_article_write_oserror_and_sibling_cancellation(tmp_path, no_waiting, monkeypatch):
+    from pathlib import Path
+
+    site = News()
+    site.add("Two", "two", "Tue, 06 Oct 2026 10:00:00 GMT")
+    site.add("Three", "three", "Wed, 07 Oct 2026 10:00:00 GMT")
+    _, sync = _make_sync(tmp_path, site)
+    real_write_text = Path.write_text
+
+    def fail_one_write(self: Path, *args, **kwargs):
+        if self.name == "2.json":
+            raise OSError("disk full")
+        return real_write_text(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "write_text", fail_one_write)
+    _, outcome = await sync.run()
+    assert outcome["new"] == 2
+    assert sync.db.one("SELECT state, error FROM feed_items WHERE id = 2")["state"] == "failed"
+
+
+async def test_f8_missing_item_record_refetched_instead_of_unchanged(tmp_path, no_waiting):
+    from zim_pro.feeds.sync import FeedSync
+
+    site = News()
+    db, sync = _make_sync(tmp_path, site)
+    await sync.run()
+    db.execute(
+        "INSERT INTO books (id, title, filename, path, size, mtime) "
+        "VALUES ('b1', 'Knot News', 'b1.zim', ?, 100, 0)",
+        (str(tmp_path / "b1.zim"),),
+    )
+    db.execute("UPDATE feeds SET book_id = 'b1'")
+    # Delete the item JSON on disk.
+    (tmp_path / "store" / "items" / "1.json").unlink()
+    site.asked.clear()
+    sync2 = FeedSync(
+        db,
+        db.one("SELECT * FROM feeds WHERE id = 1"),
+        tmp_path / "store",
+        Stage(tmp_path / "s2"),
+        Reporter(),
+        transport=httpx.MockTransport(site),
+    )
+    meta, outcome = await sync2.run()
+    assert meta is not None and outcome["new"] == 1
+    assert (tmp_path / "store" / "items" / "1.json").is_file()
+    assert "news.test/bowline" in sync2.stage.pages
+
+
+def test_f9_scheduler_respects_feed_auto_sync(tmp_path):
+    from types import SimpleNamespace
+
+    from zim_pro import scheduler
+    from zim_pro.builder.jobs import BuildManager
+
+    db = Database(":memory:")
+    pool = ArchivePool()
+    data = tmp_path / "data"
+    data.mkdir()
+    builds = BuildManager(db, EventBus(), Scanner(db, pool, data), pool, data, tmp_path / "state")
+    db.execute(
+        "INSERT INTO links (id, url, scope, feeds, feed_minutes, engine, book_id, last_built) "
+        "VALUES (1, 'https://b.test/', 'site', 'https://b.test/rss', 30, 'builtin', 'b1', 0)"
+    )
+    ctx = SimpleNamespace(db=db, builds=builds)
+
+    db.set_settings({"feed_auto_sync": False})
+    scheduler._check_due_feeds(ctx)
+    assert db.scalar("SELECT COUNT(*) FROM builds") == 0
+
+    db.set_settings({"feed_auto_sync": True})
+    scheduler._check_due_feeds(ctx)
+    assert db.scalar("SELECT COUNT(*) FROM builds") == 1
+
+
+def test_f11_check_rejects_oversized_response(api, monkeypatch):
+    from zim_pro.api import feeds as api_feeds
+
+    monkeypatch.setattr(api_feeds, "CHECK_MAX_BYTES", 100)
+
+    def big_transport(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, content=b"x" * 500, headers={"content-type": "text/xml"})
+
+    real_client = httpx.AsyncClient
+
+    def patched_client(*args, **kwargs):
+        kwargs["transport"] = httpx.MockTransport(big_transport)
+        return real_client(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", patched_client)
+    res = api.post("/api/feeds/check", json={"url": "https://big.test/feed.xml"})
+    assert res.status_code == 422
+
+
+async def test_f13_skips_carried_prepare_when_page_is_long(tmp_path, no_waiting, monkeypatch):
+    from zim_pro.builder import extract
+
+    calls = 0
+    real_prepare = extract.prepare
+
+    def counting_prepare(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_prepare(*args, **kwargs)
+
+    monkeypatch.setattr(extract, "prepare", counting_prepare)
+    site = News()
+    _, sync = _make_sync(tmp_path, site)
+    await sync.run()
+    assert calls == 1  # only the fetched page, not the short feed description
+
+
+async def test_f15_schedule_continues_after_deleted_due_feed(tmp_path):
+    feeds = manager(tmp_path, News())
+    feeds.db.execute("INSERT INTO feeds (id, title, interval_minutes) VALUES (2, 'Two', 60)")
+    feeds.db.execute("INSERT INTO feed_sources (feed_id, url) VALUES (2, 'https://two.test/rss')")
+    due = feeds.due()
+    assert [f["id"] for f in due] == [1, 2]
+    # Simulate feed 1 being deleted right after due() returned it.
+    feeds.db.execute("DELETE FROM feeds WHERE id = 1")
+    from zim_pro.builder.writer import BuildError
+
+    for feed in due:
+        try:
+            feeds.sync(feed["id"], trigger="schedule")
+        except BuildError:
+            continue
+    assert feeds.db.scalar("SELECT COUNT(*) FROM builds WHERE source_id = 2") == 1
+
+
+async def test_f16_skipped_duplicate_url_revives_when_original_retires(tmp_path, no_waiting):
+    def site(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/feed.xml":
+            rss = RSS.format(
+                items=(
+                    "<item><title>B</title><link>https://news.test/same</link>"
+                    "<pubDate>Tue, 06 Oct 2026 10:00:00 GMT</pubDate></item>"
+                    "<item><title>A</title><link>http://news.test/same</link>"
+                    "<pubDate>Mon, 05 Oct 2026 10:00:00 GMT</pubDate></item>"
+                )
+            )
+            return httpx.Response(200, content=rss, headers={"content-type": "application/rss+xml"})
+        return httpx.Response(
+            200, content=article("Same", "Enough text " * 8), headers={"content-type": "text/html"}
+        )
+
+    db2, sync2 = _make_sync(tmp_path / "k2", site, keep=2, workers=1)
+    await sync2.run()
+    row = db2.one("SELECT state FROM feed_items WHERE guid = 'http://news.test/same'")
+    assert row["state"] == "skipped"
+    # Insert a newer saved item and retire the https item with keep=1.
+    db2.execute(
+        "INSERT INTO feed_items (feed_id, guid, title, published, state, path) "
+        "VALUES (1, 'https://news.test/newer', 'Newer', 9999999999, 'saved', 'news.test/newer')"
+    )
+    db2.execute("UPDATE feeds SET keep = 1")
+    sync2.feed = db2.one("SELECT * FROM feeds WHERE id = 1")
+    sync2._retire_old()
+    row = db2.one("SELECT state FROM feed_items WHERE guid = 'http://news.test/same'")
+    assert row["state"] == "new"
+
+
+async def test_f18_total_outage_with_book_raises_build_error(tmp_path, no_waiting):
+    from zim_pro.builder.writer import BuildError
+
+    db, sync = _make_sync(tmp_path, lambda _req: httpx.Response(500))
+    db.execute(
+        "INSERT INTO books (id, title, filename, path, size, mtime) "
+        "VALUES ('b1', 'T', 'b1.zim', '', 100, 0)"
+    )
+    db.execute("UPDATE feeds SET book_id = 'b1'")
+    db.execute(
+        "INSERT INTO feed_items (feed_id, guid, title, state, path) "
+        "VALUES (1, 'g1', 'Old', 'saved', 'news.test/old')"
+    )
+    sync.feed = db.one("SELECT * FROM feeds WHERE id = 1")
+    with pytest.raises(BuildError, match="Could not read"):
+        await sync.run()

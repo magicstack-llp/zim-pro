@@ -31,13 +31,19 @@ def health(ctx: Context = Depends(get_context)) -> dict[str, bool]:
 
 @router.get("/status")
 def status(ctx: Context = Depends(get_context)) -> dict[str, Any]:
-    usage = shutil.disk_usage(ctx.config.data_dir)
+    try:
+        usage = shutil.disk_usage(ctx.config.data_dir)
+        disk_free: int | None = usage.free
+        disk_total: int | None = usage.total
+    except OSError:
+        disk_free = None
+        disk_total = None
     settings = ctx.db.get_settings()
     return {
         "books": ctx.db.scalar("SELECT COUNT(*) FROM books"),
         "library_bytes": ctx.db.scalar("SELECT COALESCE(SUM(size), 0) FROM books"),
-        "disk_free": usage.free,
-        "disk_total": usage.total,
+        "disk_free": disk_free,
+        "disk_total": disk_total,
         "catalog_entries": ctx.db.scalar("SELECT COUNT(*) FROM catalog"),
         "catalog_refreshed": ctx.db.get_meta("catalog_refreshed"),
         "catalog_error": ctx.db.get_meta("catalog_error"),
@@ -66,11 +72,19 @@ def get_book(book_id: str, ctx: Context = Depends(get_context)) -> dict[str, Any
 @router.get("/books/{book_id}/illustration")
 def illustration(book_id: str, ctx: Context = Depends(get_context)) -> Response:
     try:
-        _, archive = ctx.archive(book_id)
-        data = bytes(archive.get_illustration_item(48).content)
-    except Exception:
+        book, archive = ctx.archive(book_id)
+    except LookupError:
+        raise HTTPException(404, "No such book") from None
+    if not book.get("has_illustration"):
+        raise HTTPException(404, "No illustration")
+    try:
+        item = archive.get_illustration_item(48)
+        data = bytes(item.content)
+        media_type = item.mimetype or "image/png"
+    except (RuntimeError, OSError, KeyError) as exc:
+        log.warning("illustration failed for %s: %s", book_id, exc)
         raise HTTPException(404, "No illustration") from None
-    return Response(data, media_type="image/png", headers={"Cache-Control": "max-age=86400"})
+    return Response(data, media_type=media_type, headers={"Cache-Control": "max-age=86400"})
 
 
 class BookPatch(BaseModel):
@@ -91,13 +105,20 @@ def patch_book(book_id: str, patch: BookPatch, ctx: Context = Depends(get_contex
 
 @router.delete("/books/{book_id}", dependencies=[Depends(require_admin)])
 def delete_book(book_id: str, ctx: Context = Depends(get_context)) -> dict[str, Any]:
-    """Delete a book's ZIM file from disk."""
+    """Delete a book's ZIM file (and any shadowed older releases) from disk."""
     book = ctx.db.one("SELECT path FROM books WHERE id = ?", (book_id,))
     if book is None:
         raise HTTPException(404, "No such book")
-    ctx.pool.invalidate(book["path"])
-    Path(book["path"]).unlink(missing_ok=True)
-    Path(book["path"] + ".meta4").unlink(missing_ok=True)
+    shadowed = ctx.db.all("SELECT path FROM shadowed WHERE book_id = ?", (book_id,))
+    paths = [book["path"], *(row["path"] for row in shadowed)]
+    for path in paths:
+        ctx.pool.invalidate(path)
+        try:
+            Path(path).unlink(missing_ok=True)
+            Path(path + ".meta4").unlink(missing_ok=True)
+        except OSError as exc:
+            log.warning("failed to delete %s: %s", path, exc)
+            raise HTTPException(500, f"Could not delete file: {exc}") from None
     result = ctx.scanner.scan()
     ctx.events.publish("library", {"changed": True})
     return result
@@ -110,9 +131,13 @@ def rescan(ctx: Context = Depends(get_context)) -> dict[str, Any]:
     return result
 
 
-@router.get("/library/leftovers")
+@router.get("/library/leftovers", dependencies=[Depends(require_admin)])
 def leftovers(ctx: Context = Depends(get_context)) -> list[dict[str, Any]]:
     return ctx.scanner.leftovers()
+
+
+MAX_QUERY_CHARS = 512
+MAX_SEARCH_BOOKS = 50
 
 
 @router.get("/search")
@@ -130,6 +155,10 @@ def search(
     ranked against each other; a cross-book search returns the top hits grouped by book.
     """
     q = q.strip()
+    if len(q) > MAX_QUERY_CHARS:
+        raise HTTPException(422, f"Query must be at most {MAX_QUERY_CHARS} characters")
+    if start < 0:
+        raise HTTPException(422, "start must be non-negative")
     count = max(1, min(count, 100))
     if not q:
         return {"total": 0, "results": [], "books": []}
@@ -138,17 +167,19 @@ def search(
             _, archive = ctx.archive(book)
         except LookupError:
             raise HTTPException(404, "No such book") from None
-        return {"book": book, **zim_search.search_book(archive, q, max(0, start), count)}
+        return {"book": book, **zim_search.search_book(archive, q, start, count)}
     groups = []
     rows = ctx.db.all(
         "SELECT id, title, path, has_illustration FROM books "
-        "WHERE error IS NULL AND (? = '' OR category = ?)",
-        (category, category),
+        "WHERE error IS NULL AND (? = '' OR category = ? COLLATE NOCASE) "
+        "ORDER BY title COLLATE NOCASE LIMIT ?",
+        (category, category, MAX_SEARCH_BOOKS),
     )
     for row in rows:
         try:
             found = zim_search.search_book(ctx.pool.get(row["path"]), q, 0, 3, snippets=False)
-        except Exception:
+        except (RuntimeError, OSError, KeyError) as exc:
+            log.warning("search skipped book %s (%s): %s", row["id"], row["path"], exc)
             continue
         if found["results"]:
             groups.append(
@@ -160,11 +191,14 @@ def search(
                 }
             )
     groups.sort(key=lambda g: (g["mode"] != "fulltext", -g["total"]))
-    return {"books": groups}
+    return {"total": len(groups), "books": groups[start : start + count]}
 
 
 @router.get("/suggest")
 def suggest(q: str, book: str, count: int = 8, ctx: Context = Depends(get_context)):
+    q = q.strip()
+    if len(q) > MAX_QUERY_CHARS:
+        raise HTTPException(422, f"Query must be at most {MAX_QUERY_CHARS} characters")
     try:
         _, archive = ctx.archive(book)
     except LookupError:
@@ -202,13 +236,13 @@ def remember_search(entry: SearchEntry, ctx: Context = Depends(get_context)) -> 
     return {"saved": saved}
 
 
-@router.delete("/search/history/{entry_id}")
+@router.delete("/search/history/{entry_id}", dependencies=[Depends(require_admin)])
 def forget_search(entry_id: int, ctx: Context = Depends(get_context)) -> dict[str, bool]:
     ctx.db.execute("DELETE FROM searches WHERE id = ?", (entry_id,))
     return {"ok": True}
 
 
-@router.delete("/search/history")
+@router.delete("/search/history", dependencies=[Depends(require_admin)])
 def clear_search_history(ctx: Context = Depends(get_context)) -> dict[str, bool]:
     ctx.db.execute("DELETE FROM searches")
     return {"ok": True}
@@ -228,9 +262,7 @@ def get_settings(ctx: Context = Depends(get_context)) -> dict[str, Any]:
 
 
 @router.put("/settings", dependencies=[Depends(require_admin)])
-async def put_settings(
-    values: dict[str, Any], ctx: Context = Depends(get_context)
-) -> dict[str, Any]:
+def put_settings(values: dict[str, Any], ctx: Context = Depends(get_context)) -> dict[str, Any]:
     clean: dict[str, Any] = {}
     for key, value in values.items():
         default = DEFAULT_SETTINGS.get(key)

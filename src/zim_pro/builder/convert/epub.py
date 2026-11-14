@@ -4,6 +4,7 @@ An EPUB is a zip of XHTML chapters. Each file is stored under ``book/`` at the p
 inside the EPUB, so the links and pictures between chapters keep working untouched.
 """
 
+import html
 import posixpath
 import zipfile
 from pathlib import Path
@@ -28,6 +29,17 @@ _PAGES = ("application/xhtml+xml", "text/html")
 
 def _text(element: ElementTree.Element | None) -> str:
     return " ".join("".join(element.itertext()).split()) if element is not None else ""
+
+
+def _safe_href(folder: str, raw: str) -> str | None:
+    """Resolve an archive-relative href, rejecting any path that escapes ``book/``."""
+    cleaned = unquote(raw).replace("\\", "/").strip()
+    if not cleaned or cleaned.startswith("/"):
+        return None
+    joined = posixpath.normpath(posixpath.join(folder, cleaned))
+    if not joined or joined in (".", "..") or joined.startswith(("/", "../")) or "/../" in joined:
+        return None
+    return joined
 
 
 def _labels(book: zipfile.ZipFile, root: ElementTree.Element, folder: str) -> dict[str, str]:
@@ -79,18 +91,20 @@ def convert(
 
     manifest: dict[str, dict[str, str]] = {}
     for item in root.findall("opf:manifest/opf:item", _NS):
-        href = posixpath.normpath(posixpath.join(folder, unquote(item.get("href", ""))))
+        raw_href = item.get("href", "")
+        href = _safe_href(folder, raw_href)
         manifest[item.get("id", "")] = {
-            "href": href,
+            "href": href or "",
+            "raw": raw_href,
             "type": item.get("media-type", ""),
             "properties": item.get("properties", ""),
         }
-    spine = [
-        manifest[ref.get("idref", "")]["href"]
+    spine_items = [
+        manifest[ref.get("idref", "")]
         for ref in root.findall("opf:spine/opf:itemref", _NS)
         if ref.get("idref", "") in manifest and manifest[ref.get("idref", "")]["type"] in _PAGES
     ]
-    if not spine:
+    if not spine_items:
         raise BuildError("This EPUB has no chapters to read.")
     labels = _labels(book, root, folder)
     names = set(book.namelist())
@@ -103,7 +117,7 @@ def convert(
             if tag.get("name") == "cover":
                 cover_id = tag.get("content", "")
     for item_id, item in manifest.items():
-        if item["type"] in _PAGES or item["href"] not in names:
+        if item["type"] in _PAGES or not item["href"] or item["href"] not in names:
             continue
         picture = item["type"].startswith("image/")
         if picture and not images:
@@ -113,13 +127,20 @@ def convert(
             cover = f"book/{item['href']}"
             stage.icon = book.read(item["href"])
 
-    report.phase("converting", len(spine))
+    report.phase("converting", len(spine_items))
     contents: list[tuple[str, str]] = []
-    paths = [f"book/{href}" for href in spine]
-    for number, href in enumerate(spine):
+    valid_spine = [item["href"] for item in spine_items if item["href"]]
+    paths = [f"book/{item['href']}" for item in spine_items if item["href"]]
+    valid_idx = 0
+    for number, item in enumerate(spine_items):
         report.check()
+        href = item["href"]
+        if not href:
+            report.failed(item["raw"], "invalid path inside book")
+            continue
         if href not in names:
             report.failed(href, "listed in the book but missing from the file")
+            valid_idx += 1
             continue
         tree = HTMLParser(book.read(href))
         for node in tree.css("script, link[rel~=preload]"):
@@ -128,20 +149,22 @@ def convert(
             for node in tree.css("img, image, svg"):
                 alt = (node.attributes.get("alt") or "").strip()
                 if alt:
-                    node.replace_with(f"[{alt}]")
+                    node.replace_with(f"[{html.escape(alt)}]")
                 else:
                     node.decompose()
         body = tree.body
         if body is None:
             report.skipped(href, "an empty chapter")
+            valid_idx += 1
             continue
         text = " ".join(body.text(separator=" ", strip=True).split())
         heading = tree.css_first("h1, h2, h3")
         heading_text = " ".join(heading.text(strip=True).split()) if heading else ""
         chapter = labels.get(href) or heading_text or f"Section {number + 1}"
-        path = paths[number]
-        before = relative(path, paths[number - 1]) if number else ""
-        after = relative(path, paths[number + 1]) if number + 1 < len(paths) else ""
+        path = paths[valid_idx]
+        before = relative(path, paths[valid_idx - 1]) if valid_idx else ""
+        after = relative(path, paths[valid_idx + 1]) if valid_idx + 1 < len(valid_spine) else ""
+        valid_idx += 1
         bar = HTMLParser(nav_bar(before, relative(path, "index"), after)).css_first("nav")
         style = HTMLParser(f"<style>{BOOK_CSS}</style>").css_first("style")
         body.insert_child(bar)

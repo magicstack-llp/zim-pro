@@ -55,15 +55,6 @@ class Gluetun:
         return httpx.Response(404)
 
 
-@pytest.fixture
-def quick(monkeypatch):
-    real_sleep = asyncio.sleep
-    monkeypatch.setattr(asyncio, "sleep", lambda _seconds: real_sleep(0))
-    monkeypatch.setattr("zim_pro.builder.crawler.HOST_DELAY", 0)
-    monkeypatch.setattr("zim_pro.builder.crawler.SLOW_DELAY_MIN", 0)
-    monkeypatch.setattr("zim_pro.builder.crawler.RATE_WAIT", 0)
-
-
 def network(gluetun, **settings) -> Network:
     db = Database(":memory:")
     db.set_settings(
@@ -102,7 +93,7 @@ async def test_a_wrong_key_is_said_plainly_and_basic_auth_works_too():
     assert (await basic.status())["vpn"]["public_ip"] == "185.65.134.10"
 
 
-async def test_older_gluetun_is_asked_on_its_own_route():
+async def test_older_gluetun_is_asked_on_its_own_route(quick):
     old = Gluetun(route="openvpn")
     net = network(old)
     assert (await net.status())["vpn"]["status"] == "running"
@@ -244,8 +235,15 @@ async def test_a_site_that_never_finishes_answering_is_given_up_on(tmp_path, mon
 @pytest.fixture
 def client(tmp_path):
     (tmp_path / "data").mkdir()
-    app = create_app(Config(data_dir=tmp_path / "data", state_dir=tmp_path / "state"))
-    return TestClient(app)  # not entered: the background work is not what is tested here
+    app = create_app(
+        Config(
+            data_dir=tmp_path / "data",
+            state_dir=tmp_path / "state",
+            catalog_url="http://127.0.0.1:0/catalog.xml",
+        )
+    )
+    with TestClient(app) as c:
+        yield c
 
 
 def png(colour=(200, 30, 30), size=(64, 40)) -> bytes:
@@ -357,31 +355,42 @@ def test_a_zim_can_be_filed_under_a_category_the_library_already_has(client):
     assert link["id"]
 
 
-def test_mcp_is_open_until_a_key_is_made_and_keys_are_kept_only_as_hashes(tmp_path):
+def test_mcp_requires_a_key_or_token_and_keys_are_kept_only_as_hashes(tmp_path):
     (tmp_path / "data").mkdir()
-    app = create_app(Config(data_dir=tmp_path / "data", state_dir=tmp_path / "state"))
-    client = TestClient(app, raise_server_exceptions=False)
-    db = app.state.ctx.db
-    assert client.get("/api/mcp/keys").json() == {"keys": [], "locked": False, "admin_token": False}
-    assert client.post("/mcp", json={}).status_code != 401  # no lock yet
+    app = create_app(
+        Config(
+            data_dir=tmp_path / "data",
+            state_dir=tmp_path / "state",
+            catalog_url="http://127.0.0.1:0/catalog.xml",
+        )
+    )
+    with TestClient(app) as client:
+        db = app.state.ctx.db
+        assert client.get("/api/mcp/keys").json() == {
+            "keys": [],
+            "locked": False,
+            "admin_token": False,
+        }
+        assert client.post("/mcp", json={}).status_code == 401  # closed by default
 
-    made = client.post("/api/mcp/keys", json={"name": "Claude Code"}).json()
-    key = made["created"]["key"]
-    assert key.startswith("zp_mcp_") and len(key) > 40 and made["locked"]
-    # The key itself is nowhere in the database, nor in what is listed afterwards.
-    stored = db.one("SELECT * FROM mcp_keys")
-    assert key not in str(stored) and len(stored["digest"]) == 64
-    assert "key" not in client.get("/api/mcp/keys").json()["keys"][0]
+        made = client.post("/api/mcp/keys", json={"name": "Claude Code"}).json()
+        key = made["created"]["key"]
+        assert key.startswith("zp_mcp_") and len(key) > 40 and made["locked"]
+        # The key itself is nowhere in the database, nor in what is listed afterwards.
+        stored = db.one("SELECT * FROM mcp_keys")
+        assert key not in str(stored) and len(stored["digest"]) == 64
+        assert "key" not in client.get("/api/mcp/keys").json()["keys"][0]
 
-    assert client.post("/mcp", json={}).status_code == 401
-    wrong = {"Authorization": "Bearer zp_mcp_" + "x" * 43}
-    assert client.post("/mcp", json={}, headers=wrong).status_code == 401
-    right = {"Authorization": f"Bearer {key}"}
-    assert client.post("/mcp", json={}, headers=right).status_code != 401
-    assert db.one("SELECT last_used FROM mcp_keys")["last_used"]
+        assert client.post("/mcp", json={}).status_code == 401
+        wrong = {"Authorization": "Bearer zp_mcp_" + "x" * 43}
+        assert client.post("/mcp", json={}, headers=wrong).status_code == 401
+        right = {"Authorization": f"Bearer {key}"}
+        assert client.post("/mcp", json={}, headers=right).status_code == 400
+        assert db.one("SELECT last_used FROM mcp_keys")["last_used"]
 
-    client.delete(f"/api/mcp/keys/{stored['id']}")
-    assert client.post("/mcp", json={}).status_code != 401  # the last key gone: open again
+        client.delete(f"/api/mcp/keys/{stored['id']}")
+        # stays closed after last key is deleted
+        assert client.post("/mcp", json={}).status_code == 401
 
 
 async def test_addresses_can_be_tried_before_they_are_saved(quick):
@@ -423,3 +432,69 @@ def test_about_says_what_is_running(client):
 
 def test_health_answers_for_container_checks(client):
     assert client.get("/api/health").json() == {"ok": True}
+
+
+@pytest.mark.parametrize("payload", [[], 5, None, "running"])
+async def test_non_object_gluetun_json_does_not_raise(payload):
+    def bad(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            content=json.dumps(payload).encode(),
+            headers={"content-type": "application/json"},
+        )
+
+    net = network(bad)
+    status = await net.status()
+    assert status["vpn"]["error"]
+    tried = await net.try_vpn(
+        {
+            "build_proxy": "",
+            "vpn_control_url": "http://gluetun:8000",
+            "vpn_control_key": "secret",
+            "vpn_control_user": "",
+            "vpn_control_password": "",
+        }
+    )
+    assert not tried["control"]["ok"] and tried["control"]["error"]
+
+
+async def test_change_ip_does_not_claim_changed_when_before_ip_unavailable(quick):
+    gluetun = Gluetun()
+    fail_first_ip = True
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal fail_first_ip
+        if request.url.path == "/v1/publicip/ip" and fail_first_ip:
+            fail_first_ip = False
+            return httpx.Response(503)
+        return gluetun(request)
+
+    net = network(handler)
+    changed = await net.change_ip(forced=True)
+    assert changed is False
+    assert "previous address" in net.last_change_error
+
+
+async def test_gluetun_route_resets_on_forget_and_recovers_from_404():
+    old = Gluetun(route="openvpn")
+    net = network(old)
+    assert (await net.status())["vpn"]["status"] == "running"
+    assert net._vpn_route == "openvpn"
+
+    net.forget()
+    assert net._vpn_route == "vpn"
+
+    # Now switch transport to modern /v1/vpn/status while _vpn_route is openvpn.
+    net._vpn_route = "openvpn"
+    modern = Gluetun(route="vpn")
+    net.transport = httpx.MockTransport(modern)
+    assert (await net.status(fresh=True))["vpn"]["status"] == "running"
+    assert net._vpn_route == "vpn"
+
+
+def test_network_test_rejects_unknown_kind(tmp_path):
+    (tmp_path / "data").mkdir()
+    app = create_app(Config(data_dir=tmp_path / "data", state_dir=tmp_path / "state"))
+    with TestClient(app) as client:
+        resp = client.post("/api/network/test", json={"kind": "sovler"})
+        assert resp.status_code == 422

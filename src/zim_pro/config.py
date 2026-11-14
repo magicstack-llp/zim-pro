@@ -1,5 +1,6 @@
 from pathlib import Path
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -12,7 +13,7 @@ class Config(BaseSettings):
     state_dir: Path = Path("/state")
     host: str = "0.0.0.0"
     port: int = 8080
-    admin_token: str | None = None
+    admin_token: str | None = Field(default=None, min_length=1)
     catalog_url: str = "https://library.kiwix.org/catalog/v2/entries"
     web_dir: Path | None = None
     # A Redis server to hold the queues of downloads, builds and feed syncs, and a copy of

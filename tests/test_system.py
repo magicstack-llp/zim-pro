@@ -1,8 +1,10 @@
 import asyncio
+import contextlib
 import json
 import logging
 
 import fakeredis
+import psutil
 import pytest
 import redis
 from fastapi.testclient import TestClient
@@ -187,7 +189,11 @@ def test_requests_and_fetches_are_counted():
 
 
 @pytest.fixture
-def app_client(tmp_path):
+def app_client(tmp_path, monkeypatch):
+    async def _noop_refresh(_ctx):
+        return None
+
+    monkeypatch.setattr("zim_pro.scheduler.refresh_catalog", _noop_refresh)
     (tmp_path / "data").mkdir()
     app = create_app(Config(data_dir=tmp_path / "data", state_dir=tmp_path / "state"))
     with TestClient(app) as client:
@@ -236,3 +242,125 @@ def test_a_queue_can_be_paused_reordered_and_its_limit_changed(app_client):
     queue = app_client.post("/api/queues/builds/cancel-waiting").json()["queue"]
     assert queue["waiting"] == [] and queue["counts"]["cancelled"] == 3
     assert app_client.post("/api/queues/nope/pause").status_code == 404
+
+
+def test_redis_info_honours_outage_window_and_drops_bad_members():
+    db = Database(":memory:")
+    calls = 0
+
+    class CountingDown(fakeredis.FakeRedis):
+        def ping(self, *args, **kwargs):
+            nonlocal calls
+            calls += 1
+            raise redis.ConnectionError("refused")
+
+    server = CountingDown(decode_responses=True)
+    broker = RedisBroker(db, "redis://fake", client=server)
+    assert broker.info()["ok"] is False
+    assert calls == 1
+    # Inside the outage window, info() must not touch Redis at all.
+    assert broker.info()["ok"] is False
+    assert calls == 1
+
+    # Default client uses zero retries.
+    default_broker = RedisBroker(db, "redis://127.0.0.1:59999")
+    conn = default_broker.client.connection_pool.make_connection()
+    assert conn.retry._retries == 0
+
+    # Non-numeric members are ignored and evicted from Redis.
+    clean = fakeredis.FakeRedis(decode_responses=True)
+    clean_broker = RedisBroker(db, "redis://fake", client=clean)
+    clean.zadd("zimpro:queue:builds", {"garbage": 0.5, "2": 2.0})
+    assert [j for j, _ in clean_broker.waiting("builds", [(1, 1.0), (2, 2.0)])] == [1, 2]
+    assert clean.zrange("zimpro:queue:builds", 0, -1) == ["1", "2"]
+
+
+def test_send_logs_buffers_during_outage_and_contains_errors():
+    db = Database(":memory:")
+
+    class Flaky(fakeredis.FakeRedis):
+        fail_xadd = True
+
+        def pipeline(self, *args, **kwargs):
+            if self.fail_xadd:
+                raise RuntimeError("unexpected")
+            return super().pipeline(*args, **kwargs)
+
+    server = Flaky(decode_responses=True)
+    broker = RedisBroker(db, "redis://fake", client=server)
+    broker.send_logs([{"id": 1, "level": "INFO", "message": "buffered"}])
+    assert broker.error == "unexpected"
+
+    server.fail_xadd = False
+    broker._down_until = 0
+    broker.send_logs([{"id": 2, "level": "INFO", "message": "second"}])
+    assert server.xlen(LOG_STREAM) == 2
+
+
+def test_metrics_bounds_route_cardinality_and_tracks_lag():
+    metrics = Metrics()
+    for i in range(250):
+        metrics.request(f"/api/r{i}", 200, 0.01)
+    view = metrics.view()
+    assert len(view["requests"]) <= 101
+    assert "/api/other" in view["requests"]
+
+    metrics.record_lag(0.25)
+    metrics.record_lag(0.05)
+    assert metrics.take_lag() == 0.25
+    assert metrics.take_lag() == 0.0
+
+
+def test_rotated_logs_read_back_and_download_skips_unterminated_tail(tmp_path):
+    folder = tmp_path / "logs"
+    folder.mkdir()
+    old_line = {
+        "time": 1,
+        "level": "INFO",
+        "area": "system",
+        "logger": "t",
+        "job": "",
+        "message": "old",
+    }
+    new_line = {**old_line, "time": 2, "message": "new"}
+    (folder / "zim-pro.log.1").write_text(json.dumps(old_line) + "\n")
+    (folder / "zim-pro.log").write_text(json.dumps(new_line) + "\n")
+    restarted = logs.LogHub()
+    restarted.attach_file(folder)
+    assert [line["message"] for line in restarted.query()] == ["new", "old"]
+
+
+def test_download_logs_drops_unterminated_line_and_psutil_errors_dont_500(app_client, monkeypatch):
+    ctx = app_client.app.state.ctx
+    if logs.hub.path:
+        with logs.hub.path.open("a", encoding="utf-8") as handle:
+            handle.write('{"partial": ')
+    download = app_client.get("/api/logs/download")
+    assert download.status_code == 200
+    for line in download.text.splitlines():
+        json.loads(line)
+
+    def fail_vm():
+        raise psutil.AccessDenied(0)
+
+    class BrokenProcess:
+        def oneshot(self):
+            return contextlib.nullcontext()
+
+        def memory_info(self):
+            raise psutil.NoSuchProcess(0)
+
+    monkeypatch.setattr(psutil, "virtual_memory", fail_vm)
+    monkeypatch.setattr(ctx.monitor, "_process", BrokenProcess())
+    resp = app_client.get("/api/monitor")
+    assert resp.status_code == 200
+    assert resp.json()["system"]["memory"] is None
+
+
+def test_cross_queue_job_action_is_rejected(app_client):
+    ctx = app_client.app.state.ctx
+    app_client.post("/api/queues/feeds/pause")
+    feed_id = ctx.feeds.enqueue("feed", 1, "Feed 1")["id"]
+    resp = app_client.post(f"/api/queues/builds/jobs/{feed_id}/cancel")
+    assert resp.status_code == 404
+    assert ctx.db.one("SELECT state FROM builds WHERE id = ?", (feed_id,))["state"] == "queued"

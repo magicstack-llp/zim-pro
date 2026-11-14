@@ -4,6 +4,7 @@ import { Combobox, type Option } from "../Combobox";
 import { useModels } from "../lib/ai";
 import { api, post } from "../lib/api";
 import { bytes } from "../lib/format";
+import { changedKeys } from "../lib/helpers";
 import { useData, useLive } from "../lib/live";
 import { SolverStatus, SolverTest, VpnStatus, VpnTest } from "../Network";
 import { ErrorNote, Switch } from "../ui";
@@ -167,9 +168,11 @@ export default function Settings() {
     />
   );
   const save = async () => {
+    if (!form) return;
     setProblem(null);
     try {
-      const stored = await api<SettingsData>("/api/settings", { method: "PUT", body: JSON.stringify(form) });
+      const patch = saved ? changedKeys(form, JSON.parse(saved) as SettingsData) : form;
+      const stored = await api<SettingsData>("/api/settings", { method: "PUT", body: JSON.stringify(patch) });
       setForm(stored);
       setSaved(JSON.stringify(stored));
       setNote("Saved");
@@ -258,7 +261,12 @@ export default function Settings() {
                   <button
                     type="button"
                     className="btn"
-                    onClick={() => api("/api/search/history", { method: "DELETE" }).then(() => setHistoryCleared(true))}
+                    onClick={() => {
+                      setProblem(null);
+                      api("/api/search/history", { method: "DELETE" })
+                        .then(() => setHistoryCleared(true))
+                        .catch((reason) => setProblem(String((reason as Error).message)));
+                    }}
                     disabled={historyCleared}
                   >
                     {historyCleared ? "Cleared" : "Clear history"}

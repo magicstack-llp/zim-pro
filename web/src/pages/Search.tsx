@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { api, readUrl, type Book } from "../lib/api";
 import { Combobox } from "../Combobox";
 import { ago, categoryLabel, count } from "../lib/format";
+import { parseStart } from "../lib/helpers";
 import { useData } from "../lib/live";
 import { usePhone, useTouch } from "../lib/viewport";
 import { bookOptions, ScopeBar } from "../Scope";
@@ -127,8 +128,18 @@ export default function Search() {
   const q = params.get("q") ?? "";
   const book = params.get("book") ?? "";
   const category = params.get("category") ?? "";
-  const start = Number(params.get("start") ?? 0);
+  const rawStart = params.get("start");
+  const start = parseStart(rawStart);
+  useEffect(() => {
+    if (rawStart !== null && String(start) !== rawStart) {
+      const next = new URLSearchParams(params);
+      if (start > 0) next.set("start", String(start));
+      else next.delete("start");
+      setParams(next, { replace: true });
+    }
+  }, [rawStart, start, params, setParams]);
   const [text, setText] = useState(q);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   useEffect(() => setText(q), [q]);
 
   const phone = usePhone();
@@ -201,17 +212,30 @@ export default function Search() {
   };
 
   const historyPanel = historyOpen && (
-    <HistoryPanel
-      history={history}
-      books={books.data ?? []}
-      onPick={(past) => {
-        update({ q: past.query, book: past.book, category: past.category });
-        if (phone) showHistory(false);
-      }}
-      onForget={(past) => api(`/api/search/history/${past.id}`, { method: "DELETE" }).then(loadHistory)}
-      onClear={() => api("/api/search/history", { method: "DELETE" }).then(loadHistory)}
-      onClose={() => showHistory(false)}
-    />
+    <>
+      <ErrorNote message={historyError} />
+      <HistoryPanel
+        history={history}
+        books={books.data ?? []}
+        onPick={(past) => {
+          update({ q: past.query, book: past.book, category: past.category });
+          if (phone) showHistory(false);
+        }}
+        onForget={(past) => {
+          setHistoryError(null);
+          api(`/api/search/history/${past.id}`, { method: "DELETE" })
+            .then(loadHistory)
+            .catch((reason) => setHistoryError(String((reason as Error).message)));
+        }}
+        onClear={() => {
+          setHistoryError(null);
+          api("/api/search/history", { method: "DELETE" })
+            .then(loadHistory)
+            .catch((reason) => setHistoryError(String((reason as Error).message)));
+        }}
+        onClose={() => showHistory(false)}
+      />
+    </>
   );
   const form = (large: boolean) => (
     <div className="flex w-full items-center gap-2">

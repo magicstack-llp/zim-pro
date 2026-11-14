@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type DragEvent, type ReactNode } from "rea
 import { Link } from "react-router-dom";
 import { Dialog } from "../Dialog";
 import { bookIconOf, CategorySelect, IconPicker, NO_ICON_CHANGE, ownIcon, saveIcon, sourceIcon } from "../Filing";
-import { api, authHeaders, post, readUrl, type Build } from "../lib/api";
+import { api, authHeaders, parseResponseError, post, readUrl, type Build } from "../lib/api";
 import { ago, bytes, categoryLabel, count } from "../lib/format";
 import { useData, useLive } from "../lib/live";
 import { BookIcon, Empty, ErrorNote, PageHeader, Progress, Switch, Tabs } from "../ui";
@@ -199,7 +199,10 @@ function LinkDialog({ initial, zimitUnavailable, onClose, onSaved }: { initial: 
     setProblem(null);
     const { id, icon: _icon, book_id: _book, book_title: _title, ...body } = draft;
     api<{ id: number }>(id ? `/api/build/links/${id}` : "/api/build/links", { method: id ? "PUT" : "POST", body: JSON.stringify(body) })
-      .then((saved) => saveIcon("link", saved.id, icon))
+      .then((saved) => {
+        if (!id) setDraft((current) => ({ ...current, id: saved.id }));
+        return saveIcon("link", saved.id, icon);
+      })
       .then(onSaved)
       .catch((reason) => setProblem(String(reason.message)))
       .finally(() => setSaving(false));
@@ -440,18 +443,35 @@ function CsvDialog({ onClose, onDone }: { onClose: () => void; onDone: () => voi
 }
 
 function Links({ live, onProblem }: { live: Build[]; onProblem: (message: string | null) => void }) {
-  const { data, reload } = useData<{ links: LinkRow[]; zimit_unavailable: string }>("/api/build/links", [live.map((b) => b.state).join()]);
+  const { data, error, reload } = useData<{ links: LinkRow[]; zimit_unavailable: string }>("/api/build/links", [live.map((b) => b.state).join()]);
   const [dialog, setDialog] = useState<LinkDraft | null>(null);
   const [csv, setCsv] = useState(false);
   const act = (request: Promise<unknown>) => request.then(reload).catch((reason) => onProblem(String(reason.message)));
   const links = data?.links ?? [];
   const exportCsv = async () => {
-    const reply = await fetch("/api/build/links/export", { headers: authHeaders() });
-    const url = URL.createObjectURL(await reply.blob());
-    const anchor = Object.assign(document.createElement("a"), { href: url, download: "zim-pro-links.csv" });
-    anchor.click();
-    URL.revokeObjectURL(url);
+    onProblem(null);
+    try {
+      const reply = await fetch("/api/build/links/export", { headers: authHeaders() });
+      if (!reply.ok) throw new Error(await parseResponseError(reply));
+      const url = URL.createObjectURL(await reply.blob());
+      const filename = /filename="([^"]+)"/.exec(reply.headers.get("content-disposition") ?? "")?.[1] ?? "zim-pro-links.csv";
+      const anchor = Object.assign(document.createElement("a"), { href: url, download: filename });
+      anchor.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (reason) {
+      onProblem(String((reason as Error).message));
+    }
   };
+  if (error && !data) {
+    return (
+      <div className="space-y-3">
+        <ErrorNote message={error} />
+        <button className="btn" onClick={reload}>
+          Retry
+        </button>
+      </div>
+    );
+  }
   return (
     <>
       <div className="mb-3 flex flex-wrap gap-2">
@@ -577,9 +597,13 @@ function Links({ live, onProblem }: { live: Build[]; onProblem: (message: string
 
 const KIND_LABEL = { zim: "ZIM", epub: "EPUB", pdf: "PDF", mobi: "Kindle" };
 
+const ALLOWED_UPLOAD_EXTENSIONS = new Set([".zim", ".pdf", ".epub", ".mobi", ".azw3", ".azw"]);
+const UPLOAD_TIMEOUT_MS = 10 * 60 * 1000;
+
 function Uploads({ live, onProblem }: { live: Build[]; onProblem: (message: string | null) => void }) {
-  const { data, reload } = useData<{ uploads: UploadRow[]; limit_mb: number }>("/api/build/uploads", [live.map((b) => b.state).join()]);
+  const { data, error, reload } = useData<{ uploads: UploadRow[]; limit_mb: number }>("/api/build/uploads", [live.map((b) => b.state).join()]);
   const [sending, setSending] = useState<{ name: string; fraction: number } | null>(null);
+  const sendingRef = useRef(false);
   const [over, setOver] = useState(false);
   const [again, setAgain] = useState<UploadRow | null>(null);
   const picker = useRef<HTMLInputElement>(null);
@@ -590,6 +614,7 @@ function Uploads({ live, onProblem }: { live: Build[]; onProblem: (message: stri
     new Promise<void>((resolve, reject) => {
       const request = new XMLHttpRequest();
       request.open("POST", "/api/build/uploads");
+      request.timeout = UPLOAD_TIMEOUT_MS;
       for (const [key, value] of Object.entries(authHeaders())) request.setRequestHeader(key, value);
       request.upload.onprogress = (event) => setSending({ name: file.name, fraction: event.total ? event.loaded / event.total : 0 });
       request.onload = () => {
@@ -603,28 +628,59 @@ function Uploads({ live, onProblem }: { live: Build[]; onProblem: (message: stri
         reject(new Error(detail));
       };
       request.onerror = () => reject(new Error(`${file.name} could not be uploaded.`));
+      request.ontimeout = () => reject(new Error(`${file.name} upload timed out.`));
       const form = new FormData();
       form.append("file", file);
       request.send(form);
     });
   const sendAll = async (files: FileList | File[]) => {
+    if (sendingRef.current) return;
+    sendingRef.current = true;
     onProblem(null);
-    for (const file of Array.from(files)) {
-      setSending({ name: file.name, fraction: 0 });
-      try {
-        await send(file);
-      } catch (reason) {
-        onProblem(String((reason as Error).message));
+    const errors: string[] = [];
+    const limitBytes = data?.limit_mb ? data.limit_mb * 1024 * 1024 : 0;
+    try {
+      for (const file of Array.from(files)) {
+        const dot = file.name.lastIndexOf(".");
+        const ext = dot >= 0 ? file.name.slice(dot).toLowerCase() : "";
+        if (!ALLOWED_UPLOAD_EXTENSIONS.has(ext)) {
+          errors.push(`${file.name}: unsupported file type`);
+          continue;
+        }
+        if (limitBytes && file.size > limitBytes) {
+          errors.push(`${file.name}: exceeds ${bytes(limitBytes)} limit`);
+          continue;
+        }
+        setSending({ name: file.name, fraction: 0 });
+        try {
+          await send(file);
+        } catch (reason) {
+          errors.push(String((reason as Error).message));
+        }
       }
+      if (errors.length) onProblem(errors.join("; "));
+    } finally {
+      sendingRef.current = false;
+      setSending(null);
+      reload();
     }
-    setSending(null);
-    reload();
   };
   const drop = (event: DragEvent) => {
     event.preventDefault();
     setOver(false);
+    if (sendingRef.current) return;
     if (event.dataTransfer.files.length) sendAll(event.dataTransfer.files);
   };
+  if (error && !data) {
+    return (
+      <div className="space-y-3">
+        <ErrorNote message={error} />
+        <button className="btn" onClick={reload}>
+          Retry
+        </button>
+      </div>
+    );
+  }
   const uploads = data?.uploads ?? [];
   return (
     <>
@@ -799,8 +855,18 @@ const JOB_EMPTY: Record<JobTab, [string, string]> = {
 };
 
 export function JobLog({ id, path = "/api/build/jobs" }: { id: number; path?: string }) {
-  const { data } = useData<Build>(`${path}/${id}`);
+  const { data, error, reload } = useData<Build>(`${path}/${id}`);
   const log = data?.log ?? [];
+  if (!data && error) {
+    return (
+      <div className="mt-2 space-y-2">
+        <ErrorNote message={error} />
+        <button className="btn" onClick={reload}>
+          Retry
+        </button>
+      </div>
+    );
+  }
   if (!data) return <p className="muted mt-2 text-xs">Loading…</p>;
   if (!log.length) return <p className="muted mt-2 text-xs">Everything was saved; nothing was skipped or failed.</p>;
   const tone = { failed: "text-red-600 dark:text-red-400", skipped: "text-amber-700 dark:text-amber-400", note: "muted" };

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { Dialog } from "../Dialog";
 import { bookIconOf, CategorySelect, IconPicker, NO_ICON_CHANGE, ownIcon, saveIcon, sourceIcon } from "../Filing";
-import { api, authHeaders, post, readUrl, type Build } from "../lib/api";
+import { api, authHeaders, parseResponseError, post, readUrl, type Build } from "../lib/api";
 import { ago, bytes, categoryLabel, count, day } from "../lib/format";
 import { useData, useLive } from "../lib/live";
 import { BookIcon, Empty, ErrorNote, PageHeader, Progress, Tabs } from "../ui";
@@ -144,6 +144,7 @@ function FeedDialog({ initial, onClose, onSaved }: { initial: Draft; onClose: ()
     const held = !id && !!icon.file;
     api<{ id: number }>(id ? `/api/feeds/${id}` : `/api/feeds${held ? "?hold=true" : ""}`, { method: id ? "PUT" : "POST", body: JSON.stringify(body) })
       .then(async (saved) => {
+        if (!id) setDraft((current) => ({ ...current, id: saved.id }));
         await saveIcon("feed", saved.id, icon);
         if (held && body.enabled) await post(`/api/feeds/${saved.id}/sync`);
       })
@@ -470,8 +471,52 @@ const ITEM_TONE: Record<ItemState, string> = {
 function Articles({ feed, revision }: { feed: FeedRow; revision: string }) {
   const [state, setState] = useState<ItemState | "">("");
   const [query, setQuery] = useState("");
-  const [shown, setShown] = useState(30);
-  const { data } = useData<{ items: Item[]; total: number }>(`/api/feeds/${feed.id}/items?count=${shown}&state=${state}&q=${encodeURIComponent(query)}`, [revision]);
+  const [items, setItems] = useState<Item[]>([]);
+  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    let gone = false;
+    setLoadError(null);
+    api<{ items: Item[]; total: number }>(`/api/feeds/${feed.id}/items?start=0&count=30&state=${state}&q=${encodeURIComponent(query)}`, { signal: controller.signal })
+      .then((res) => {
+        if (gone) return;
+        setItems(res.items);
+        setTotal(res.total);
+        setLoaded(true);
+      })
+      .catch((reason) => {
+        if (!gone && !controller.signal.aborted) setLoadError(String((reason as Error).message ?? reason));
+      });
+    return () => {
+      gone = true;
+      controller.abort();
+    };
+  }, [feed.id, state, query, revision]);
+
+  const loadMore = async () => {
+    if (loadingMore || items.length >= total) return;
+    setLoadingMore(true);
+    setLoadError(null);
+    try {
+      const res = await api<{ items: Item[]; total: number }>(
+        `/api/feeds/${feed.id}/items?start=${items.length}&count=100&state=${state}&q=${encodeURIComponent(query)}`,
+      );
+      setItems((prev) => {
+        const seen = new Set(prev.map((i) => i.id));
+        return [...prev, ...res.items.filter((i) => !seen.has(i.id))];
+      });
+      setTotal(res.total);
+    } catch (reason) {
+      setLoadError(String((reason as Error).message ?? reason));
+    } finally {
+      setLoadingMore(false);
+    }
+  };
+
   const filters = (["saved", "new", "failed", "skipped", "dropped"] as const).filter((key) => feed.counts[key]);
   return (
     <div className="mt-3 rounded-xl bg-zinc-50 p-3 dark:bg-zinc-950">
@@ -499,9 +544,10 @@ function Articles({ feed, revision }: { feed: FeedRow; revision: string }) {
         </select>
         <input className="input w-40 flex-1 py-1 text-xs sm:flex-none" placeholder="Filter by title" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Filter articles by title" />
       </div>
-      {data && data.items.length === 0 && <p className="muted mt-2 text-xs">No articles here yet.</p>}
+      {loadError && <p className="mt-2 text-xs text-red-600 dark:text-red-400">{loadError}</p>}
+      {loaded && items.length === 0 && !loadError && <p className="muted mt-2 text-xs">No articles here yet.</p>}
       <ul className="mt-2 max-h-96 space-y-1.5 overflow-y-auto text-xs">
-        {data?.items.map((item) => (
+        {items.map((item) => (
           <li key={item.id} className="min-w-0">
             {item.state === "saved" && feed.book_id && feed.book_title !== null ? (
               <Link className="text-brand-700 dark:text-brand-400 font-medium hover:underline" to={readUrl(feed.book_id, item.path)}>
@@ -525,9 +571,9 @@ function Articles({ feed, revision }: { feed: FeedRow; revision: string }) {
           </li>
         ))}
       </ul>
-      {data && data.total > data.items.length && (
-        <button className="btn mt-2" onClick={() => setShown(shown + 100)}>
-          Show more ({count(data.total - data.items.length)} left)
+      {items.length < total && (
+        <button className="btn mt-2" onClick={loadMore} disabled={loadingMore}>
+          {loadingMore ? "Loading…" : `Show more (${count(total - items.length)} left)`}
         </button>
       )}
     </div>
@@ -536,7 +582,7 @@ function Articles({ feed, revision }: { feed: FeedRow; revision: string }) {
 
 function Collections({ runs, onProblem }: { runs: Build[]; onProblem: (message: string | null) => void }) {
   const revision = runs.map((run) => `${run.id}${run.state}`).join();
-  const { data, reload } = useData<{ feeds: FeedRow[]; auto_sync: boolean }>("/api/feeds", [revision]);
+  const { data, error, reload } = useData<{ feeds: FeedRow[]; auto_sync: boolean }>("/api/feeds", [revision]);
   const settings = useData<SettingsData>("/api/settings");
   const [dialog, setDialog] = useState<Draft | null>(null);
   const [opml, setOpml] = useState(false);
@@ -564,11 +610,28 @@ function Collections({ runs, onProblem }: { runs: Build[]; onProblem: (message: 
     category: "",
   };
   const exportOpml = async () => {
-    const reply = await fetch("/api/feeds/opml", { headers: authHeaders() });
-    const url = URL.createObjectURL(await reply.blob());
-    Object.assign(document.createElement("a"), { href: url, download: "zim-pro-feeds.opml" }).click();
-    URL.revokeObjectURL(url);
+    onProblem(null);
+    try {
+      const reply = await fetch("/api/feeds/opml", { headers: authHeaders() });
+      if (!reply.ok) throw new Error(await parseResponseError(reply));
+      const url = URL.createObjectURL(await reply.blob());
+      const filename = /filename="([^"]+)"/.exec(reply.headers.get("content-disposition") ?? "")?.[1] ?? "zim-pro-feeds.opml";
+      Object.assign(document.createElement("a"), { href: url, download: filename }).click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (reason) {
+      onProblem(String((reason as Error).message));
+    }
   };
+  if (error && !data) {
+    return (
+      <div className="space-y-3">
+        <ErrorNote message={error} />
+        <button className="btn" onClick={reload}>
+          Retry
+        </button>
+      </div>
+    );
+  }
   return (
     <>
       <div className="mb-3 flex flex-wrap gap-2">

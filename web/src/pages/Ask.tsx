@@ -7,6 +7,7 @@ import { Combobox, type Option } from "../Combobox";
 import { modelKey, modelOptions, shortModel, splitModelKey, useModels } from "../lib/ai";
 import { api, authHeaders, readUrl, type Book, type Status } from "../lib/api";
 import { categoryCounts, categoryLabel } from "../lib/format";
+import { linkCitations } from "../lib/helpers";
 import { useData } from "../lib/live";
 import { speak, stopSpeaking } from "../lib/speech";
 import { tidyMarkdown } from "../lib/tidy";
@@ -122,11 +123,6 @@ const ICONS = {
 
 const isWeb = (source: Source) => source.kind === "web";
 const sourceLink = (source: Source) => (isWeb(source) ? (source.url ?? "#") : readUrl(source.book, source.path));
-
-/** Turn "[2]" in the answer into a link the renderer swaps for a citation pill. */
-function linkCitations(text: string, sources: Source[] = []): string {
-  return text.replace(/\[(\d+)\](?!\()/g, (whole, n) => (sources.some((s) => s.n === +n) ? `[${n}](#cite-${n})` : whole));
-}
 
 function SourceIcon({ source, size = 20 }: { source: Source; size?: number }) {
   if (isWeb(source)) {
@@ -440,14 +436,36 @@ function Answer({
     [message.content, message.pending, sources.length],
   );
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const copyTimer = useRef<number | undefined>(undefined);
   const [hot, setHot] = useState<number | null>(null);
+  useEffect(() => () => window.clearTimeout(copyTimer.current), []);
   const copy = async () => {
+    setCopyFailed(false);
+    let ok = false;
     try {
       await navigator.clipboard.writeText(content);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      ok = true;
     } catch {
-      /* clipboard is unavailable on plain http from another machine */
+      const box = document.createElement("textarea");
+      box.value = content;
+      box.style.position = "fixed";
+      box.style.opacity = "0";
+      document.body.append(box);
+      box.select();
+      try {
+        ok = document.execCommand("copy");
+      } catch {
+        ok = false;
+      }
+      box.remove();
+    }
+    if (ok) {
+      setCopied(true);
+      window.clearTimeout(copyTimer.current);
+      copyTimer.current = window.setTimeout(() => setCopied(false), 1500);
+    } else {
+      setCopyFailed(true);
     }
   };
   return (
@@ -486,7 +504,7 @@ function Answer({
                   },
                 }}
               >
-                {linkCitations(content, sources)}
+                {linkCitations(content, sources.map((s) => s.n))}
               </Markdown>
             </div>
           )}
@@ -536,10 +554,16 @@ function Answer({
           {!message.pending && (
             <div className="mt-2 -ml-1.5 flex items-center gap-0.5">
               {content && (
-                <button className={ICON_BUTTON} onClick={copy} title={copied ? "Copied" : "Copy answer"} aria-label="Copy answer">
+                <button
+                  className={ICON_BUTTON}
+                  onClick={copy}
+                  title={copied ? "Copied" : copyFailed ? "Copy failed" : "Copy answer"}
+                  aria-label={copyFailed ? "Copy failed" : "Copy answer"}
+                >
                   <Icon d={copied ? ICONS.check : ICONS.copy} />
                 </button>
               )}
+              {copyFailed && <span className="text-xs text-red-600 dark:text-red-400">Copy failed</span>}
               {content && ttsMode !== "off" && <Listen text={content} mode={ttsMode} />}
               {onRegenerate && (
                 <button className={ICON_BUTTON} onClick={onRegenerate} title="Answer again" aria-label="Answer again">
@@ -603,6 +627,7 @@ function History({
   header?: ReactNode;
 }) {
   const [filter, setFilter] = useState("");
+  const [problem, setProblem] = useState<string | null>(null);
   const shown = useMemo(() => {
     const words = filter.toLowerCase().split(/\s+/).filter(Boolean);
     return chats.filter((chat) => words.every((word) => chat.title.toLowerCase().includes(word)));
@@ -611,13 +636,23 @@ function History({
   const rename = async (chat: Chat) => {
     const title = window.prompt("Rename chat", chat.title)?.trim();
     if (!title || title === chat.title) return;
-    await api(`/api/ai/chats/${chat.id}`, { method: "PATCH", body: JSON.stringify({ title }) });
-    onChanged();
+    setProblem(null);
+    try {
+      await api(`/api/ai/chats/${chat.id}`, { method: "PATCH", body: JSON.stringify({ title }) });
+      onChanged();
+    } catch (reason) {
+      setProblem(String((reason as Error).message));
+    }
   };
   const remove = async (chat: Chat) => {
     if (!window.confirm(`Delete “${chat.title}”? This cannot be undone.`)) return;
-    await api(`/api/ai/chats/${chat.id}`, { method: "DELETE" });
-    onChanged(chat.id);
+    setProblem(null);
+    try {
+      await api(`/api/ai/chats/${chat.id}`, { method: "DELETE" });
+      onChanged(chat.id);
+    } catch (reason) {
+      setProblem(String((reason as Error).message));
+    }
   };
 
   return (
@@ -627,6 +662,7 @@ function History({
         {header}
       </div>
       <div className="space-y-2 p-3">
+        <ErrorNote message={problem} />
         <button
           className="from-brand-600 hover:from-brand-500 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r to-sky-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:to-sky-500 hover:shadow"
           onClick={onNew}
@@ -702,7 +738,7 @@ export default function Ask() {
   const status = useData<Status>("/api/status");
   const books = useData<Book[]>("/api/books");
   const chats = useData<Chat[]>("/api/ai/chats");
-  const { groups } = useModels();
+  const { groups, error: modelsError } = useModels();
   const [messages, setMessages] = useState<Message[]>([]);
   const [text, setText] = useState("");
   const [scope, setScope] = useState("");
@@ -794,7 +830,10 @@ export default function Ask() {
     [models, current],
   );
 
+  const busyRef = useRef(false);
   const stream = async (body: Record<string, unknown>, seed: (all: Message[]) => Message[]) => {
+    if (busyRef.current) return;
+    busyRef.current = true;
     const mine = ++run.current;
     const patchLast = (change: (message: Message) => Message) =>
       mine === run.current && setMessages((all) => [...all.slice(0, -1), change(all[all.length - 1])]);
@@ -859,6 +898,7 @@ export default function Ask() {
     } finally {
       patchLast((m) => ({ ...m, pending: false, status: undefined }));
       if (mine === run.current) {
+        busyRef.current = false;
         setBusy(false);
         chats.reload();
         focusInput();
@@ -873,7 +913,7 @@ export default function Ask() {
   const submit = (event?: FormEvent) => {
     event?.preventDefault();
     const question = text.trim();
-    if (!question || busy) return;
+    if (!question || !ready || busy || busyRef.current) return;
     setText("");
     void ask(question);
   };
@@ -889,6 +929,7 @@ export default function Ask() {
       run.current += 1;
       abort.current?.abort();
       streaming.current = null;
+      busyRef.current = false;
       setBusy(false);
       setMessages([]);
     }
@@ -1066,6 +1107,7 @@ export default function Ask() {
                   Answers written from the articles in your books, with every source one click away.
                 </p>
               </div>
+              <ErrorNote message={status.error ?? books.error ?? chats.error ?? modelsError} />
               {setup}
               {composer}
               {ready && suggestions.length > 0 && (
@@ -1073,8 +1115,9 @@ export default function Ask() {
                   {suggestions.map(([label, prompt]) => (
                     <button
                       key={prompt}
-                      className="group rounded-2xl border border-zinc-200 bg-white/70 px-4 py-3 text-left transition hover:-translate-y-0.5 hover:border-zinc-300 hover:bg-white hover:shadow-md dark:border-zinc-800 dark:bg-zinc-900/60 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
-                      onClick={() => void ask(prompt)}
+                      disabled={busy}
+                      className="group rounded-2xl border border-zinc-200 bg-white/70 px-4 py-3 text-left transition hover:-translate-y-0.5 hover:border-zinc-300 hover:bg-white hover:shadow-md disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900/60 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
+                      onClick={() => !busyRef.current && ready && void ask(prompt)}
                     >
                       <span className="text-brand-700 dark:text-brand-400 text-[11px] font-semibold tracking-wider uppercase">{label}</span>
                       <span className="mt-0.5 block text-sm text-zinc-700 dark:text-zinc-200">{prompt}</span>

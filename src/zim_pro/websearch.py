@@ -65,7 +65,7 @@ async def search(
                 rows = [("title", "url", "content"), "results"]
             else:
                 raise AIError("No web search service is set up.")
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL, ValueError) as exc:
         raise AIError(f"Web search failed: {exc or type(exc).__name__}") from exc
     if response.status_code != 200:
         hint = " (SearXNG must have the JSON format enabled)" if service == "searxng" else ""

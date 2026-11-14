@@ -26,6 +26,15 @@ ADDRESS_ECHO = "https://www.cloudflare.com/cdn-cgi/trace"
 _IP_FIELDS = ("public_ip", "country", "region", "city", "organization", "timezone")
 
 
+def _json_dict(reply: httpx.Response) -> dict[str, Any]:
+    if not reply.content:
+        return {}
+    data = reply.json()
+    if not isinstance(data, dict):
+        raise ValueError(f"Expected JSON object, got {type(data).__name__}")
+    return data
+
+
 class Network:
     """The proxy and solver in use, what they report, and changing the VPN's address."""
 
@@ -115,11 +124,14 @@ class Network:
 
     async def _vpn_status(self, client: httpx.AsyncClient) -> str:
         reply = await client.get(f"/v1/{self._vpn_route}/status")
-        if reply.status_code == 404 and self._vpn_route == "vpn":
-            self._vpn_route = "openvpn"
-            reply = await client.get("/v1/openvpn/status")
+        if reply.status_code == 404:
+            other = "openvpn" if self._vpn_route == "vpn" else "vpn"
+            alt = await client.get(f"/v1/{other}/status")
+            if alt.status_code != 404:
+                self._vpn_route = other
+                reply = alt
         reply.raise_for_status()
-        return str(reply.json().get("status", "")).lower()
+        return str(_json_dict(reply).get("status", "")).lower()
 
     async def _set_vpn(self, client: httpx.AsyncClient, status: str) -> None:
         reply = await client.put(f"/v1/{self._vpn_route}/status", json={"status": status})
@@ -129,7 +141,7 @@ class Network:
     async def _public_ip(client: httpx.AsyncClient) -> dict[str, str]:
         reply = await client.get("/v1/publicip/ip")
         reply.raise_for_status()
-        data = reply.json() if reply.content else {}
+        data = _json_dict(reply)
         return {key: str(data.get(key) or "") for key in _IP_FIELDS}
 
     async def _look_at_vpn(self) -> dict[str, Any]:
@@ -153,7 +165,7 @@ class Network:
                 vpn["status"] = await self._vpn_status(client)
                 if vpn["status"] == "running":
                     vpn.update(await self._public_ip(client))
-        except (httpx.HTTPError, ValueError) as exc:
+        except (httpx.HTTPError, ValueError, AttributeError, TypeError) as exc:
             vpn["error"] = self._problem(exc)
         return vpn
 
@@ -171,7 +183,7 @@ class Network:
                     control["status"] = await self._vpn_status(client)
                     control.update(await self._public_ip(client))
                 control["ok"] = True
-            except (httpx.HTTPError, ValueError) as exc:
+            except (httpx.HTTPError, ValueError, AttributeError, TypeError) as exc:
                 control["error"] = self._problem(exc)
             control["ms"] = round((time.monotonic() - began) * 1000)
             result["control"] = control
@@ -223,14 +235,14 @@ class Network:
             async with httpx.AsyncClient(timeout=8, transport=self.transport) as client:
                 reply = await client.get(address + "/")
                 reply.raise_for_status()
-                data = reply.json()
+                data = _json_dict(reply)
             solver["ready"] = "ready" in str(data.get("msg", "")).lower()
             solver["version"] = str(data.get("version") or "")
             if not solver["ready"]:
                 solver["error"] = "It answered, but not as FlareSolverr does."
         except httpx.HTTPStatusError as exc:
             solver["error"] = f"It answered HTTP {exc.response.status_code}."
-        except (httpx.HTTPError, ValueError, AttributeError) as exc:
+        except (httpx.HTTPError, ValueError, AttributeError, TypeError) as exc:
             solver["error"] = f"It cannot be reached ({exc or type(exc).__name__})."
         return solver
 
@@ -256,6 +268,7 @@ class Network:
     def forget(self) -> None:
         """Settings changed: what was seen before may no longer be true."""
         self._status_at = float("-inf")
+        self._vpn_route = "vpn"
 
     # -- another address ------------------------------------------------------------
 
@@ -275,19 +288,19 @@ class Network:
                 return False  # the new address is being refused too: waiting is what is left
             self._steady.clear()
             self._publish()
-            before = ""
+            before: str | None = None
             try:
                 async with self._client(15) as client:
                     try:
-                        before = (await self._public_ip(client))["public_ip"]
-                    except (httpx.HTTPError, ValueError):
+                        before = (await self._public_ip(client))["public_ip"] or None
+                    except (httpx.HTTPError, ValueError, AttributeError, TypeError):
                         pass
                     await self._vpn_status(client)  # settles which route this Gluetun has
                     await self._set_vpn(client, "stopped")
                     await asyncio.sleep(1)
                     await self._set_vpn(client, "running")
                     after = await self._wait_for_address(client)
-            except (httpx.HTTPError, ValueError, NetworkError) as exc:
+            except (httpx.HTTPError, ValueError, AttributeError, TypeError, NetworkError) as exc:
                 self.last_change_error = self._problem(exc)
                 log.warning("changing the VPN address failed: %s", self.last_change_error)
                 raise NetworkError(self.last_change_error) from exc
@@ -299,10 +312,17 @@ class Network:
             self.generation += 1
             self.changes += 1
             self.last_change = time.time()
-            changed = bool(after) and after != before
-            self.last_change_error = (
-                "" if changed else "The VPN reconnected with the same address as before."
-            )
+            if before is None:
+                changed = False
+                self.last_change_error = (
+                    "The VPN reconnected, but the previous address could not be read to compare."
+                )
+            elif not after or after == before:
+                changed = False
+                self.last_change_error = "The VPN reconnected with the same address as before."
+            else:
+                changed = True
+                self.last_change_error = ""
             log.info("VPN address changed: %s -> %s", before or "?", after or "?")
             self._publish()
             return changed
@@ -315,7 +335,7 @@ class Network:
                 if await self._vpn_status(client) != "running":
                     continue
                 address = (await self._public_ip(client))["public_ip"]
-            except (httpx.HTTPError, ValueError):
+            except (httpx.HTTPError, ValueError, AttributeError, TypeError):
                 continue  # the control server is busy while the tunnel comes up
             if address:
                 return address

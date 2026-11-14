@@ -6,10 +6,11 @@ Talking to that socket is control of the host's Docker, which is why this engine
 unless the socket has been made available on purpose.
 """
 
-import asyncio
+import contextlib
 import os
 import re
 import socket
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -92,16 +93,19 @@ async def capture(link: dict[str, Any], folder: Path, report: Reporter, name: st
             command[-1] = output
         else:
             host["Binds"] = [f"{folder.resolve()}:/output"]
+        cname = f"zim-pro-zimit-{slugify(name, 40)}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
         created = await client.post(
             "/containers/create",
-            params={"name": f"zim-pro-zimit-{slugify(name, 40)}-{os.getpid()}"},
+            params={"name": cname},
             json={"Image": f"{IMAGE}:latest", "Cmd": command, "HostConfig": host},
         )
         if created.status_code != 201:
             raise BuildError(f"The capture could not be started: {created.text[:200]}")
         container = created.json()["Id"]
         try:
-            await client.post(f"/containers/{container}/start")
+            started = await client.post(f"/containers/{container}/start")
+            if started.status_code not in (204, 304):
+                raise BuildError(f"The capture could not be started: {started.text[:200]}")
             report.phase("capturing", 1 if link["scope"] == "page" else link["max_pages"])
             tail = ""
             async with client.stream(
@@ -120,7 +124,9 @@ async def capture(link: dict[str, Any], folder: Path, report: Reporter, name: st
                 last = re.sub(r"[^\x20-\x7e]", "", lines[-1])[:300] if lines else "no output"
                 raise BuildError(f"The capture failed: {last}")
         finally:
-            await asyncio.shield(client.delete(f"/containers/{container}", params={"force": "1"}))
+            with contextlib.suppress(httpx.HTTPError):
+                async with _client() as cleanup:
+                    await cleanup.delete(f"/containers/{container}", params={"force": "1"})
     files = sorted(folder.glob("*.zim"), key=lambda f: f.stat().st_mtime)
     if not files:
         raise BuildError("The capture finished but produced no ZIM file.")

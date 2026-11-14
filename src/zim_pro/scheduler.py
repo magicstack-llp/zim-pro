@@ -24,7 +24,10 @@ async def refresh_catalog(ctx: Context) -> None:
     ctx.db.set_meta("catalog_error", None)
     ctx.db.set_meta("catalog_retry_after", None)
     ctx.events.publish("catalog", {"entries": count})
-    queue_auto_updates(ctx)
+    try:
+        queue_auto_updates(ctx)
+    except Exception:
+        log.exception("auto-update check failed")
 
 
 def queue_auto_updates(ctx: Context) -> int:
@@ -57,6 +60,8 @@ def _rebuild_due_links(ctx: Context) -> None:
 
 def _check_due_feeds(ctx: Context) -> None:
     """Queue an update from its RSS feeds for every link whose time to look has come."""
+    if not ctx.db.get_setting("feed_auto_sync"):
+        return
     due = ctx.db.all(
         "SELECT id, url, title FROM links WHERE feeds != '' AND feed_minutes > 0 "
         "AND engine = 'builtin' AND book_id != '' "
@@ -83,7 +88,7 @@ async def run(ctx: Context) -> None:
         try:
             refreshed = ctx.db.get_meta("catalog_refreshed") or 0
             retry_after = ctx.db.get_meta("catalog_retry_after") or 0
-            interval = int(ctx.db.get_setting("catalog_refresh_hours")) * 3600
+            interval = float(ctx.db.get_setting("catalog_refresh_hours")) * 3600
             now = time.time()
             if now - refreshed >= interval and now >= retry_after:
                 await refresh_catalog(ctx)

@@ -92,10 +92,12 @@ export function Tabs<T extends string>({
   options: { value: T; label: string; count?: number }[];
 }) {
   return (
-    <div className="mb-4 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-zinc-200 [scrollbar-width:none] dark:border-zinc-800">
+    <div role="tablist" className="mb-4 flex gap-1 overflow-x-auto overflow-y-hidden border-b border-zinc-200 [scrollbar-width:none] dark:border-zinc-800">
       {options.map((option) => (
         <button
           key={option.value}
+          role="tab"
+          aria-selected={value === option.value}
           onClick={() => onChange(option.value)}
           className={`border-b-2 px-3 py-2.5 text-sm font-medium whitespace-nowrap sm:py-2 ${
             value === option.value

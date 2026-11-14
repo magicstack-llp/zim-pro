@@ -84,19 +84,37 @@ export default function Reader() {
   }, [bookId]);
 
   useEffect(() => {
-    if (query.trim().length < 2) return setSuggestions([]);
+    if (query.trim().length < 2) {
+      setSuggestions([]);
+      return;
+    }
+    const controller = new AbortController();
+    let gone = false;
     const timer = setTimeout(() => {
-      api<Suggestion[]>(`/api/suggest?book=${encodeURIComponent(bookId)}&q=${encodeURIComponent(query)}`)
-        .then(setSuggestions)
-        .catch(() => setSuggestions([]));
+      api<Suggestion[]>(`/api/suggest?book=${encodeURIComponent(bookId)}&q=${encodeURIComponent(query)}`, { signal: controller.signal })
+        .then((items) => !gone && setSuggestions(items))
+        .catch(() => !gone && setSuggestions([]));
     }, 150);
-    return () => clearTimeout(timer);
+    return () => {
+      gone = true;
+      clearTimeout(timer);
+      controller.abort();
+    };
   }, [query, bookId]);
 
   const go = (url: string) => {
-    // Replace, don't assign: changing the src attribute to its current value does nothing.
-    if (frame.current?.contentWindow) frame.current.contentWindow.location.replace(url);
-    else setSrc(url);
+    // Replace when same-origin, otherwise assign iframe.src directly so same-URL reloads still work.
+    try {
+      if (frame.current?.contentWindow) {
+        frame.current.contentWindow.location.replace(url);
+        setOpen(false);
+        return;
+      }
+    } catch {
+      /* sandboxed iframe blocks cross-origin location access */
+    }
+    if (frame.current) frame.current.src = url;
+    setSrc(url);
     setOpen(false);
   };
 
@@ -222,6 +240,7 @@ export default function Reader() {
         ref={frame}
         src={src}
         onLoad={syncLocation}
+        sandbox="allow-scripts allow-forms allow-popups"
         title={book?.title ?? "Article"}
         className={`min-h-0 w-full flex-1 border-0 bg-white ${asMarkdown ? "hidden" : ""}`}
       />

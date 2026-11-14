@@ -10,6 +10,7 @@ import asyncio
 import html as html_text
 import json
 import shutil
+import sqlite3
 import time
 from pathlib import Path
 from typing import Any
@@ -28,7 +29,7 @@ MAX_TRIES = 3  # times an article is asked for before it is left as failed
 THIN = 0.6  # a fetched page with less text than this share of the feed's own is not the article
 
 
-def article_shell(title: str, body: str, url: str) -> str:
+def article_shell(title: str, body: str) -> str:
     """An article as the feed carries it, as a page ``extract.prepare`` can clean."""
     return (
         f"<html><head><title>{html_text.escape(title)}</title></head><body><article>"
@@ -77,7 +78,7 @@ class FeedSync:
         self.fetcher = self.crawler.fetcher
         # An article does not change once published: what is in the cache is used as it is.
         self.fetcher.prefer_cache = True
-        self.found = self.saved_now = self.failed_now = self.dropped = 0
+        self.found = self.saved_now = self.failed_now = self.dropped = self.sources_ok = 0
 
     async def run(self) -> tuple[ZimMeta | None, dict[str, Any]]:
         """Sync; returns the ZIM to write (None when nothing changed) and what happened."""
@@ -87,9 +88,25 @@ class FeedSync:
             await asyncio.gather(*self.crawler._met.values(), return_exceptions=True)
             await self.fetcher.close()
 
+    def _check_feed_exists(self) -> None:
+        if self.db.one("SELECT id FROM feeds WHERE id = ?", (self.feed["id"],)) is None:
+            raise BuildError("The feed collection this sync was for has been removed.")
+
+    def _reconcile_missing_records(self) -> None:
+        """Reset saved items whose on-disk record vanished so this sync can refetch them."""
+        for row in self.db.all(
+            "SELECT id FROM feed_items WHERE feed_id = ? AND state = 'saved'", (self.feed["id"],)
+        ):
+            if not (self.items_dir / f"{row['id']}.json").is_file():
+                self.db.execute(
+                    "UPDATE feed_items SET state = 'new', tries = 0, path = '' WHERE id = ?",
+                    (row["id"],),
+                )
+
     async def _run(self) -> tuple[ZimMeta | None, dict[str, Any]]:
         feed, report = self.feed, self.report
         await self._check_sources()
+        self._reconcile_missing_records()
         await self._fetch_articles()
         self._retire_old()
         total = self.db.scalar(
@@ -104,6 +121,13 @@ class FeedSync:
             "solved": self.fetcher.solved,
             "address_changes": self.fetcher.address_changes,
         }
+        if not self.sources_ok and not self.saved_now and not self.rebuild:
+            why = next((e["why"] for e in report.log if e["kind"] == "failed"), "")
+            raise BuildError(
+                "Could not read "
+                + ("any of these feeds" if len(self.sources) > 1 else "this feed")
+                + (f": {why}" if why else ".")
+            )
         if not total:
             why = next((e["why"] for e in report.log if e["kind"] == "failed"), "")
             raise BuildError(
@@ -124,26 +148,44 @@ class FeedSync:
     async def _check_sources(self) -> None:
         report = self.report
         report.phase("checking feeds", len(self.sources))
-        for number, source in enumerate(self.sources, 1):
-            await report.gate()
+        sem = asyncio.Semaphore(max(1, min(self.crawler.workers, 4)))
+        results: dict[int, parse.Feed] = {}
+        done = 0
+
+        async def check_one(source: dict[str, Any]) -> None:
+            nonlocal done
             error = None
             try:
-                fetched = await self.fetcher.get(source["url"], 20 * MB, fresh=True)
-                data = fetched.file.read_bytes()
-                parsed = await asyncio.to_thread(parse.parse, data, fetched.url)
-                self._remember(source, parsed)
-            except (FetchError, parse.NotAFeed) as exc:
-                error = str(exc)
+                async with sem:
+                    await report.gate()
+                    fetched = await self.fetcher.get(source["url"], 20 * MB, fresh=True)
+                    data = fetched.file.read_bytes()
+                    results[source["id"]] = await asyncio.to_thread(parse.parse, data, fetched.url)
+            except (FetchError, parse.NotAFeed, ValueError, OSError) as exc:
+                error = str(exc) or type(exc).__name__
                 report.failed(source["url"], error)
-            self.db.execute(
-                "UPDATE feed_sources SET last_checked = unixepoch('subsec'), last_error = ? "
-                "WHERE id = ?",
-                (error, source["id"]),
-            )
-            report.progress(number)
+            finally:
+                self.db.execute(
+                    "UPDATE feed_sources SET last_checked = unixepoch('subsec'), last_error = ? "
+                    "WHERE id = ?",
+                    (error, source["id"]),
+                )
+                done += 1
+                report.progress(done)
+
+        async with asyncio.TaskGroup() as tg:
+            for source in self.sources:
+                tg.create_task(check_one(source))
+
+        for source in self.sources:
+            parsed = results.get(source["id"])
+            if parsed is not None:
+                self.sources_ok += 1
+                self._remember(source, parsed)
 
     def _remember(self, source: dict[str, Any], parsed: parse.Feed) -> None:
         """Note the articles of a feed that were not seen before."""
+        self._check_feed_exists()
         self.db.execute(
             "UPDATE feed_sources SET title = ?, site = ? WHERE id = ?",
             (parsed.title or source["title"], parsed.site or source["site"], source["id"]),
@@ -156,45 +198,69 @@ class FeedSync:
             )
         if not self.feed["language"] and parsed.language:
             self.feed["language"] = parsed.language
+            self.db.execute(
+                "UPDATE feeds SET language = ? WHERE id = ?", (parsed.language, self.feed["id"])
+            )
+        if parsed.skipped:
+            self.report.skipped(source["url"], f"{parsed.skipped} entries had no link or id")
         now = time.time()
         for entry in parsed.entries:
-            cursor = self.db.execute(
-                "INSERT OR IGNORE INTO feed_items "
-                "(feed_id, source_id, guid, url, title, author, published, content) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    self.feed["id"],
-                    source["id"],
-                    entry.guid,
-                    entry.url,
-                    entry.title,
-                    entry.author,
-                    entry.published or now,
-                    entry.html,
-                ),
-            )
+            try:
+                cursor = self.db.execute(
+                    "INSERT OR IGNORE INTO feed_items "
+                    "(feed_id, source_id, guid, url, title, author, published, content) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    (
+                        self.feed["id"],
+                        source["id"],
+                        entry.guid,
+                        entry.url,
+                        entry.title,
+                        entry.author,
+                        entry.published or now,
+                        entry.html,
+                    ),
+                )
+            except sqlite3.IntegrityError as exc:
+                self._check_feed_exists()
+                raise BuildError("Could not store feed items.") from exc
             self.found += cursor.rowcount
 
     # -- the new articles -------------------------------------------------------------
 
     async def _fetch_articles(self) -> None:
         feed, report = self.feed, self.report
-        wanted = "state = 'new' OR state = 'failed'"
-        if not self.rebuild:
-            wanted = f"state = 'new' OR (state = 'failed' AND tries < {MAX_TRIES})"
+        if self.rebuild:
+            wanted = "state IN ('new', 'failed', 'dropped', 'skipped')"
+        else:
+            wanted = f"state IN ('new', 'dropped') OR (state = 'failed' AND tries < {MAX_TRIES})"
         pending = self.db.all(
-            f"SELECT * FROM feed_items WHERE feed_id = ? AND ({wanted}) ORDER BY published DESC",
+            f"SELECT * FROM feed_items WHERE feed_id = ? AND ({wanted}) "
+            "ORDER BY published DESC, id DESC",
             (feed["id"],),
         )
-        if feed["keep"] and len(pending) > feed["keep"]:
-            # More new articles than the collection keeps: the older ones would be saved
-            # only to be dropped.
-            for item in pending[feed["keep"] :]:
-                self.db.execute(
-                    "UPDATE feed_items SET state = 'dropped', content = '' WHERE id = ?",
-                    (item["id"],),
+        keep = int(feed["keep"] or 0)
+        if keep > 0 and pending:
+            # Only items in the top `keep` across saved + pending can survive retirement.
+            keep_ids = {
+                row["id"]
+                for row in self.db.all(
+                    f"SELECT id FROM feed_items WHERE feed_id = ? "
+                    f"AND (state = 'saved' OR ({wanted})) ORDER BY published DESC, id DESC LIMIT ?",
+                    (feed["id"], keep),
                 )
-            pending = pending[: feed["keep"]]
+            }
+            kept: list[dict[str, Any]] = []
+            for item in pending:
+                if item["id"] in keep_ids:
+                    kept.append(item)
+                elif item["state"] != "dropped":
+                    self.db.execute(
+                        "UPDATE feed_items SET state = 'dropped' WHERE id = ?",
+                        (item["id"],),
+                    )
+                    self.dropped += 1
+            pending = kept
         report.phase("fetching articles", len(pending))
         taken = {
             row["path"]
@@ -202,18 +268,22 @@ class FeedSync:
                 "SELECT path FROM feed_items WHERE feed_id = ? AND state = 'saved'", (feed["id"],)
             )
         }
+        sem = asyncio.Semaphore(max(1, self.crawler.workers))
         done = 0
 
         async def one(item: dict[str, Any]) -> None:
             nonlocal done
             try:
-                await report.gate()
-                await self._article(item, taken)
+                async with sem:
+                    await report.gate()
+                    await self._article(item, taken)
             finally:
                 done += 1
                 report.progress(done)
 
-        await asyncio.gather(*(one(item) for item in pending))
+        async with asyncio.TaskGroup() as tg:
+            for item in pending:
+                tg.create_task(one(item))
 
     async def _article(self, item: dict[str, Any], taken: set[str]) -> None:
         feed = self.feed
@@ -238,11 +308,14 @@ class FeedSync:
                     why = "the address does not hold a web page"
             except FetchError as exc:
                 why = str(exc)
-        if item["content"].strip():
+        if item["content"].strip() and (
+            prepared is None
+            or len(prepared.text) < THIN * (len(item["title"]) + len(item["content"]) + 1)
+        ):
             base = item["url"] or self.sources[0]["url"]
             carried = await asyncio.to_thread(
                 lambda: extract.prepare(
-                    article_shell(item["title"], item["content"], base), base, True, images, video
+                    article_shell(item["title"], item["content"]), base, True, images, video
                 )
             )
             # A page with much less to say than the feed itself is a paywall or an empty shell.
@@ -255,7 +328,12 @@ class FeedSync:
                     )
                 prepared, final = carried, base
         if prepared is None or not prepared.text.strip():
-            why = why or "the feed carries no text for this article and it has no address"
+            if not why:
+                why = (
+                    "the feed carries no text for this article; turn on full text to fetch it"
+                    if item["url"] and not feed["full_text"]
+                    else "the feed carries no text for this article and it has no address"
+                )
             self.failed_now += 1
             self.report.failed(item["url"] or item["title"], why)
             self.db.execute(
@@ -266,7 +344,7 @@ class FeedSync:
         path = extract.zim_path(final) if item["url"] else f"articles/{item['id']}"
         if path in taken:
             self.db.execute(
-                "UPDATE feed_items SET state = 'skipped', content = '', "
+                "UPDATE feed_items SET state = 'skipped', "
                 "error = 'the same article as another one in this collection' WHERE id = ?",
                 (item["id"],),
             )
@@ -281,7 +359,19 @@ class FeedSync:
             "text": prepared.text,
             "resources": prepared.resources,
         }
-        (self.items_dir / f"{item['id']}.json").write_text(json.dumps(record), "utf-8")
+        try:
+            self.items_dir.mkdir(parents=True, exist_ok=True)
+            (self.items_dir / f"{item['id']}.json").write_text(json.dumps(record), "utf-8")
+        except OSError as exc:
+            taken.discard(path)
+            self.failed_now += 1
+            why = str(exc) or type(exc).__name__
+            self.report.failed(item["url"] or item["title"], why)
+            self.db.execute(
+                "UPDATE feed_items SET state = 'failed', tries = tries + 1, error = ? WHERE id = ?",
+                (why, item["id"]),
+            )
+            return
         self.db.execute(
             "UPDATE feed_items SET state = 'saved', path = ?, content = '', error = NULL "
             "WHERE id = ?",
@@ -304,7 +394,13 @@ class FeedSync:
             self.db.execute(
                 "UPDATE feed_items SET state = 'dropped', path = '' WHERE id = ?", (row["id"],)
             )
-        self.dropped = len(old)
+        self.dropped += len(old)
+        if old:
+            self.db.execute(
+                "UPDATE feed_items SET state = 'new', error = NULL "
+                "WHERE feed_id = ? AND state = 'skipped'",
+                (self.feed["id"],),
+            )
 
     # -- the ZIM ----------------------------------------------------------------------
 
@@ -359,7 +455,9 @@ class FeedSync:
         ]
         wanted = set(crawler.resources)
         await crawler._resources()
-        missing_file.write_text(json.dumps(sorted(missing | (wanted - set(crawler.saved)))))
+        missing_file.write_text(
+            json.dumps(sorted((missing & wanted) | (wanted - set(crawler.saved))))
+        )
         report.phase("converting", len(stage.pages))
         await crawler._localise()
         if self.dropped:

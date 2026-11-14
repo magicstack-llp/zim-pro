@@ -63,8 +63,11 @@ class FeedManager(BuildManager):
             try:
                 if self.db.get_setting("feed_auto_sync"):
                     for feed in self.due():
-                        self.sync(feed["id"], trigger="schedule")
-                        log.info("queued the scheduled sync of %s", feed["title"] or feed["id"])
+                        try:
+                            self.sync(feed["id"], trigger="schedule")
+                            log.info("queued the scheduled sync of %s", feed["title"] or feed["id"])
+                        except BuildError:
+                            continue
             except asyncio.CancelledError:
                 raise
             except Exception:
@@ -80,6 +83,7 @@ class FeedManager(BuildManager):
         self.db.execute(
             "UPDATE feeds SET last_attempt = unixepoch('subsec') WHERE id = ?", (feed["id"],)
         )
+        sync: FeedSync | None = None
         try:
             sync = FeedSync(
                 self.db,
@@ -102,8 +106,15 @@ class FeedManager(BuildManager):
                 self._own_icon(stage, "feed", feed["id"])
                 report = await self._write(stage, meta, reporter)
             report.update(outcome)
-        except BuildError as exc:
-            self.db.execute("UPDATE feeds SET last_error = ? WHERE id = ?", (str(exc), feed["id"]))
+        except Exception as exc:
+            error = str(exc) or type(exc).__name__
+            if sync is not None and sync.saved_now:
+                self.db.execute(
+                    "UPDATE feeds SET last_error = ?, last_new = ? WHERE id = ?",
+                    (error, sync.saved_now, feed["id"]),
+                )
+            else:
+                self.db.execute("UPDATE feeds SET last_error = ? WHERE id = ?", (error, feed["id"]))
             raise
         self.db.execute(
             "UPDATE feeds SET book_id = ?, last_synced = unixepoch('subsec'), last_new = ?, "

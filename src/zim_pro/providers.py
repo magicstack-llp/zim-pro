@@ -9,6 +9,7 @@ import asyncio
 import base64
 import json
 import logging
+import random
 import re
 import struct
 import time
@@ -62,6 +63,9 @@ _NOT_CHAT = re.compile(
 
 GEMINI_API = "https://generativelanguage.googleapis.com/v1beta"
 MODEL_CACHE_SECONDS = 300
+DEFAULT_MAX_TOKENS = 2048
+MAX_RETRIES = 2
+_RETRYABLE_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 
 class AIError(Exception):
@@ -112,6 +116,18 @@ def guess_kind(base_url: str) -> str:
 
 def clean_url(base_url: str) -> str:
     return base_url.strip().rstrip("/").removesuffix("/chat/completions")
+
+
+def validate_url(base_url: str) -> str:
+    """Clean and validate an HTTP(S) provider URL using ``httpx.URL``."""
+    cleaned = clean_url(base_url)
+    try:
+        parsed = httpx.URL(cleaned)
+    except httpx.InvalidURL as exc:
+        raise ValueError(str(exc)) from exc
+    if parsed.scheme not in ("http", "https") or not parsed.host:
+        raise ValueError("URL must be an http:// or https:// address with a host")
+    return cleaned
 
 
 # -- storage --------------------------------------------------------------------------
@@ -270,11 +286,13 @@ async def list_models(provider: Provider, use_cache: bool = False) -> list[str]:
             if response.status_code != 200:
                 raise await _fail(response)
             data = response.json()
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         raise _unreachable(provider, exc) from exc
     except ValueError as exc:
         raise AIError(f"{provider.name} did not return a model list") from exc
     items = data.get("data", data) if isinstance(data, dict) else data
+    if not isinstance(items, list):
+        raise AIError(f"{provider.name} did not return a model list")
     models = sorted(str(m["id"]) for m in items if isinstance(m, dict) and m.get("id"))
     models = usable_models(provider, models)
     _models[provider.id] = (time.monotonic(), models)
@@ -398,15 +416,85 @@ def _citations(chunk: dict[str, Any], delta: dict[str, Any]) -> list[dict[str, s
     return found
 
 
+def _retry_delay(attempt: int, response: httpx.Response | None = None) -> float:
+    """Seconds to wait before retrying, honouring ``Retry-After`` up to 10 s."""
+    if response is not None:
+        raw = response.headers.get("retry-after", "").strip()
+        if raw:
+            try:
+                return max(0.0, min(float(raw), 10.0))
+            except ValueError:
+                pass
+    return 0.5 * (2**attempt) + random.uniform(0, 0.3)
+
+
+def _chunk_error(chunk: dict[str, Any], provider: Provider) -> AIError | None:
+    err = chunk.get("error")
+    if not err:
+        return None
+    if isinstance(err, dict):
+        msg = err.get("message") or str(err)
+    else:
+        msg = str(err)
+    return AIError(f"{provider.name} error: {str(msg).strip()[:300]}")
+
+
+async def _iter_sse_json(
+    response: httpx.Response, provider: Provider
+) -> AsyncIterator[dict[str, Any]]:
+    """Yield parsed JSON objects from an SSE stream, reassembling multi-line data frames."""
+    buf: list[str] = []
+
+    def _flush() -> tuple[bool, dict[str, Any] | None]:
+        if not buf:
+            return False, None
+        payload = "\n".join(buf).strip()
+        buf.clear()
+        if not payload:
+            return False, None
+        if payload == "[DONE]":
+            return True, None
+        try:
+            chunk = json.loads(payload)
+        except ValueError:
+            return False, None
+        if not isinstance(chunk, dict):
+            return False, None
+        err = _chunk_error(chunk, provider)
+        if err is not None:
+            raise err
+        return False, chunk
+
+    async for line in response.aiter_lines():
+        if line == "":
+            done, chunk = _flush()
+            if done:
+                return
+            if chunk is not None:
+                yield chunk
+        elif line.startswith("data:"):
+            val = line[5:]
+            if val.startswith(" "):
+                val = val[1:]
+            buf.append(val)
+    done, chunk = _flush()
+    if not done and chunk is not None:
+        yield chunk
+
+
 async def stream_chat(
-    provider: Provider, model: str, messages: list[dict[str, str]], web: bool = False
+    provider: Provider,
+    model: str,
+    messages: list[dict[str, str]],
+    web: bool = False,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> AsyncIterator[Event]:
     """Stream a chat reply. With ``web`` the model is asked to search the internet itself."""
     started = time.monotonic()
     ok = False
     log.info("asking %s (%s)%s", provider.name, model, ", with web search" if web else "")
     try:
-        async for event in _stream_chat(provider, model, messages, web):
+        async for event in _stream_chat(provider, model, messages, web, max_tokens):
             yield event
         ok = True
     except (GeneratorExit, asyncio.CancelledError):
@@ -423,53 +511,74 @@ async def stream_chat(
 
 
 async def _stream_chat(
-    provider: Provider, model: str, messages: list[dict[str, str]], web: bool
+    provider: Provider,
+    model: str,
+    messages: list[dict[str, str]],
+    web: bool,
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> AsyncIterator[Event]:
     if not model:
         raise AIError("No model is chosen. Pick one in the chat box or under Settings.")
     if web and provider.kind == "gemini":
-        async for event in _gemini_grounded(provider, model, messages):
+        async for event in _gemini_grounded(provider, model, messages, max_tokens):
             yield event
         return
-    payload: dict[str, Any] = {"model": model, "messages": messages, "stream": True}
+    payload: dict[str, Any] = {
+        "model": model,
+        "messages": messages,
+        "stream": True,
+        "max_tokens": max_tokens,
+    }
     if web and provider.kind == "openrouter":
         payload["plugins"] = [{"id": "web"}]
     elif web and provider.kind == "openai":
         payload["web_search_options"] = {}
-    splitter = ReasoningSplitter()
-    try:
-        async with _client(provider) as client:
-            async with client.stream("POST", "chat/completions", json=payload) as response:
-                if response.status_code != 200:
-                    raise await _fail(response)
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                    except ValueError:
-                        continue
-                    choices = chunk.get("choices") or []
-                    delta = (choices[0].get("delta") or {}) if choices else {}
-                    # Thinking sent in its own field: DeepSeek and vLLM call it
-                    # reasoning_content, OpenRouter and Ollama call it reasoning.
-                    thinking = delta.get("reasoning_content") or delta.get("reasoning")
-                    if isinstance(thinking, str) and thinking:
-                        yield "reasoning", thinking
-                    if delta.get("content"):
-                        for event in splitter.feed(delta["content"]):
-                            yield event
-                    if web:
-                        cited = _citations(chunk, delta)
-                        if cited:
-                            yield "citations", cited
-                for event in splitter.flush():
-                    yield event
-    except httpx.HTTPError as exc:
-        raise _unreachable(provider, exc) from exc
+
+    for attempt in range(MAX_RETRIES + 1):
+        splitter = ReasoningSplitter()
+        yielded = False
+        try:
+            async with _client(provider) as client:
+                async with client.stream("POST", "chat/completions", json=payload) as response:
+                    if response.status_code != 200:
+                        if response.status_code in _RETRYABLE_STATUSES and attempt < MAX_RETRIES:
+                            await response.aread()
+                            await asyncio.sleep(_retry_delay(attempt, response))
+                            continue
+                        raise await _fail(response)
+                    async for chunk in _iter_sse_json(response, provider):
+                        choices = chunk.get("choices")
+                        first = choices[0] if isinstance(choices, list) and choices else None
+                        delta = first.get("delta") if isinstance(first, dict) else None
+                        if not isinstance(delta, dict):
+                            delta = {}
+                        # Thinking sent in its own field: DeepSeek and vLLM call it
+                        # reasoning_content, OpenRouter and Ollama call it reasoning.
+                        thinking = delta.get("reasoning_content") or delta.get("reasoning")
+                        if isinstance(thinking, str) and thinking:
+                            yielded = True
+                            yield "reasoning", thinking
+                        content = delta.get("content")
+                        if isinstance(content, str) and content:
+                            for event in splitter.feed(content):
+                                yielded = True
+                                yield event
+                        if web:
+                            cited = _citations(chunk, delta)
+                            if cited:
+                                yielded = True
+                                yield "citations", cited
+                    for event in splitter.flush():
+                        yielded = True
+                        yield event
+                    return
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            if not yielded and attempt < MAX_RETRIES:
+                await asyncio.sleep(_retry_delay(attempt))
+                continue
+            raise _unreachable(provider, exc) from exc
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            raise _unreachable(provider, exc) from exc
 
 
 def _gemini_root(provider: Provider) -> str:
@@ -477,7 +586,10 @@ def _gemini_root(provider: Provider) -> str:
 
 
 async def _gemini_grounded(
-    provider: Provider, model: str, messages: list[dict[str, str]]
+    provider: Provider,
+    model: str,
+    messages: list[dict[str, str]],
+    max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> AsyncIterator[Event]:
     """Gemini's Google Search grounding, which only its native API offers."""
     system = "\n\n".join(m["content"] for m in messages if m["role"] == "system")
@@ -491,40 +603,69 @@ async def _gemini_grounded(
             if m["role"] != "system"
         ],
         "tools": [{"google_search": {}}],
+        "generationConfig": {"maxOutputTokens": max_tokens},
     }
     if system:
         payload["systemInstruction"] = {"parts": [{"text": system}]}
     path = f"models/{model.removeprefix('models/')}:streamGenerateContent"
-    try:
-        async with httpx.AsyncClient(
-            base_url=_gemini_root(provider) + "/",
-            headers={"x-goog-api-key": provider.api_key},
-            timeout=httpx.Timeout(20, read=300),
-        ) as client:
-            async with client.stream("POST", path, params={"alt": "sse"}, json=payload) as response:
-                if response.status_code != 200:
-                    raise await _fail(response)
-                async for line in response.aiter_lines():
-                    if not line.startswith("data:"):
-                        continue
-                    try:
-                        chunk = json.loads(line[5:])
-                    except ValueError:
-                        continue
-                    for candidate in chunk.get("candidates") or []:
-                        for part in (candidate.get("content") or {}).get("parts") or []:
-                            if part.get("text"):
-                                yield ("reasoning" if part.get("thought") else "text"), part["text"]
-                        grounding = candidate.get("groundingMetadata") or {}
-                        cited = [
-                            {"url": c["web"]["uri"], "title": c["web"].get("title") or ""}
-                            for c in grounding.get("groundingChunks") or []
-                            if isinstance(c.get("web"), dict) and c["web"].get("uri")
-                        ]
-                        if cited:
-                            yield "citations", cited
-    except httpx.HTTPError as exc:
-        raise _unreachable(provider, exc) from exc
+    for attempt in range(MAX_RETRIES + 1):
+        yielded = False
+        try:
+            async with httpx.AsyncClient(
+                base_url=_gemini_root(provider) + "/",
+                headers={"x-goog-api-key": provider.api_key},
+                timeout=httpx.Timeout(20, read=300),
+            ) as client:
+                async with client.stream(
+                    "POST", path, params={"alt": "sse"}, json=payload
+                ) as response:
+                    if response.status_code != 200:
+                        if response.status_code in _RETRYABLE_STATUSES and attempt < MAX_RETRIES:
+                            await response.aread()
+                            await asyncio.sleep(_retry_delay(attempt, response))
+                            continue
+                        raise await _fail(response)
+                    async for chunk in _iter_sse_json(response, provider):
+                        for candidate in chunk.get("candidates") or []:
+                            if not isinstance(candidate, dict):
+                                continue
+                            content_obj = candidate.get("content") or {}
+                            for part in (
+                                content_obj.get("parts") if isinstance(content_obj, dict) else []
+                            ) or []:
+                                if (
+                                    isinstance(part, dict)
+                                    and isinstance(part.get("text"), str)
+                                    and part["text"]
+                                ):
+                                    yielded = True
+                                    yield (
+                                        ("reasoning" if part.get("thought") else "text"),
+                                        part["text"],
+                                    )
+                            grounding = candidate.get("groundingMetadata") or {}
+                            if isinstance(grounding, dict):
+                                cited = [
+                                    {
+                                        "url": c["web"]["uri"],
+                                        "title": c["web"].get("title") or "",
+                                    }
+                                    for c in grounding.get("groundingChunks") or []
+                                    if isinstance(c, dict)
+                                    and isinstance(c.get("web"), dict)
+                                    and c["web"].get("uri")
+                                ]
+                                if cited:
+                                    yielded = True
+                                    yield "citations", cited
+                    return
+        except (httpx.TimeoutException, httpx.ConnectError) as exc:
+            if not yielded and attempt < MAX_RETRIES:
+                await asyncio.sleep(_retry_delay(attempt))
+                continue
+            raise _unreachable(provider, exc) from exc
+        except (httpx.HTTPError, httpx.InvalidURL) as exc:
+            raise _unreachable(provider, exc) from exc
 
 
 async def complete(provider: Provider, model: str, messages: list[dict[str, str]]) -> str:
@@ -595,7 +736,7 @@ async def speech(provider: Provider, model: str, voice: str, text: str) -> tuple
                 raise await _fail(response)
             media_type = response.headers.get("content-type", "audio/mpeg").split(";")[0]
             return response.content, media_type if media_type.startswith("audio/") else "audio/mpeg"
-    except httpx.HTTPError as exc:
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
         raise _unreachable(provider, exc) from exc
     except (KeyError, IndexError, StopIteration, ValueError) as exc:
         raise AIError(f"{provider.name} did not return audio for model {model!r}") from exc

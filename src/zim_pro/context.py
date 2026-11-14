@@ -1,3 +1,4 @@
+import hmac
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -42,11 +43,29 @@ class Context:
         book = self.book(book_id)
         if book is None:
             raise LookupError(f"no book named {book_id!r}")
-        return book, self.pool.get(book["path"])
+        try:
+            return book, self.pool.get(book["path"])
+        except (RuntimeError, OSError) as exc:
+            self.pool.invalidate(book["path"])
+            raise LookupError(f"archive for {book_id!r} could not be opened: {exc}") from exc
 
 
 def get_context(request: Request) -> Context:
     return request.app.state.ctx
+
+
+def bearer_token(request: Request) -> str:
+    """Extract the token from an Authorization: Bearer header, case-insensitively."""
+    header = request.headers.get("authorization", "").strip()
+    scheme, _, token = header.partition(" ")
+    if scheme.lower() == "bearer":
+        return token.strip()
+    return ""
+
+
+def is_admin_token(supplied: str, expected: str | None) -> bool:
+    """Constant-time comparison for the configured admin token."""
+    return bool(expected) and hmac.compare_digest(supplied.encode(), expected.encode())
 
 
 def require_admin(request: Request) -> None:
@@ -54,6 +73,5 @@ def require_admin(request: Request) -> None:
     token = request.app.state.ctx.config.admin_token
     if not token:
         return
-    supplied = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-    if supplied != token:
+    if not is_admin_token(bearer_token(request), token):
         raise HTTPException(401, "admin token required")

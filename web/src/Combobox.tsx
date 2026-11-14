@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { usePhone, useScrollLock, useTouch } from "./lib/viewport";
 
@@ -63,6 +63,7 @@ export function Combobox({
   const [open, setOpen] = useState(false);
   const [filter, setFilter] = useState("");
   const [cursor, setCursor] = useState(0);
+  const listboxId = useId();
   const root = useRef<HTMLDivElement>(null);
   const sheet = useRef<HTMLDivElement>(null);
   const list = useRef<HTMLUListElement>(null);
@@ -91,8 +92,15 @@ export function Combobox({
       const target = event.target as Node;
       if (!root.current?.contains(target) && !sheet.current?.contains(target)) setOpen(false);
     };
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
     document.addEventListener("mousedown", close);
-    return () => document.removeEventListener("mousedown", close);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", close);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open]);
   useEffect(() => setCursor(0), [filter, open]);
   useEffect(() => {
@@ -111,6 +119,7 @@ export function Combobox({
         type="button"
         aria-haspopup="listbox"
         aria-expanded={open}
+        aria-controls={open ? listboxId : undefined}
         onClick={() => setOpen(!open)}
         className={`min-w-0 ${className} ${selected || active ? "is-selected" : ""}`}
       >
@@ -152,6 +161,8 @@ export function Combobox({
               className="input"
               placeholder={searchPlaceholder}
               aria-label={searchPlaceholder}
+              aria-controls={listboxId}
+              aria-activedescendant={shown[cursor] ? `${listboxId}-opt-${cursor}` : undefined}
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               onKeyDown={(e) => {
@@ -162,13 +173,14 @@ export function Combobox({
               }}
             />
           </div>
-          <ul ref={list} role="listbox" className={phone ? "min-h-0 flex-1 overflow-y-auto overscroll-contain py-1" : "max-h-72 overflow-y-auto py-1"}>
+          <ul id={listboxId} ref={list} role="listbox" className={phone ? "min-h-0 flex-1 overflow-y-auto overscroll-contain py-1" : "max-h-72 overflow-y-auto py-1"}>
             {shown.map((option, index) => (
               <li key={option.value} role="presentation">
                 {option.group && (index === 0 || shown[index - 1].group !== option.group) && (
                   <div className="muted px-3 pt-2 pb-1 text-xs font-semibold tracking-wide uppercase">{option.group}</div>
                 )}
                 <button
+                  id={`${listboxId}-opt-${index}`}
                   type="button"
                   role="option"
                   aria-selected={option.value === value}
@@ -224,6 +236,8 @@ export function Combobox({
               className="input"
               placeholder={searchPlaceholder}
               aria-label={searchPlaceholder}
+              aria-controls={listboxId}
+              aria-activedescendant={shown[cursor] ? `${listboxId}-opt-${cursor}` : undefined}
               value={filter}
               onChange={(e) => setFilter(e.target.value)}
               onKeyDown={(e) => {
@@ -234,13 +248,14 @@ export function Combobox({
               }}
             />
           </div>
-          <ul ref={list} role="listbox" className={phone ? "min-h-0 flex-1 overflow-y-auto overscroll-contain py-1" : "max-h-72 overflow-y-auto py-1"}>
+          <ul id={listboxId} ref={list} role="listbox" className={phone ? "min-h-0 flex-1 overflow-y-auto overscroll-contain py-1" : "max-h-72 overflow-y-auto py-1"}>
             {shown.map((option, index) => (
               <li key={option.value} role="presentation">
                 {option.group && (index === 0 || shown[index - 1].group !== option.group) && (
                   <div className="muted px-3 pt-2 pb-1 text-xs font-semibold tracking-wide uppercase">{option.group}</div>
                 )}
                 <button
+                  id={`${listboxId}-opt-${index}`}
                   type="button"
                   role="option"
                   aria-selected={option.value === value}

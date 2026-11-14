@@ -14,7 +14,7 @@ def find_entry(archive: Archive, path: str, query: str = "") -> Entry | None:
     if query:
         # Zimit archives keep the query string as part of the entry path.
         candidates += [f"{path}?{query}", f"{path}?{unquote(query)}"]
-    candidates += [path, unquote(path)]
+    candidates.append(path)
     if not archive.has_new_namespace_scheme and not re.match(r"^[A-Za-z-]/", path):
         candidates += [f"A/{path}", f"I/{path}", f"-/{path}"]
     for candidate in candidates:
@@ -23,27 +23,32 @@ def find_entry(archive: Archive, path: str, query: str = "") -> Entry | None:
     return None
 
 
+def resolve_redirects(entry: Entry) -> Entry | None:
+    """Follow ZIM redirect entries up to MAX_REDIRECTS; return None on cycles or broken targets."""
+    for _ in range(MAX_REDIRECTS):
+        if not entry.is_redirect:
+            return entry
+        try:
+            entry = entry.get_redirect_entry()
+        except (RuntimeError, KeyError):
+            return None
+    return None if entry.is_redirect else entry
+
+
 def main_path(archive: Archive) -> str | None:
     if not archive.has_main_entry:
         return None
-    entry = archive.main_entry
-    for _ in range(MAX_REDIRECTS):
-        if not entry.is_redirect:
-            break
-        entry = entry.get_redirect_entry()
-    return entry.path
+    entry = resolve_redirects(archive.main_entry)
+    return entry.path if entry is not None else None
 
 
 def random_path(archive: Archive) -> str | None:
     try:
         entry = archive.get_random_entry()
-    except Exception:
+    except (RuntimeError, OSError, KeyError):
         return main_path(archive)
-    for _ in range(MAX_REDIRECTS):
-        if not entry.is_redirect:
-            break
-        entry = entry.get_redirect_entry()
-    return entry.path
+    entry = resolve_redirects(entry)
+    return entry.path if entry is not None else main_path(archive)
 
 
 _DROP = (
@@ -107,9 +112,11 @@ def read_article(archive: Archive, path: str) -> Article | None:
     entry = find_entry(archive, path)
     if entry is None:
         return None
-    for _ in range(MAX_REDIRECTS):
-        if not entry.is_redirect:
-            break
-        entry = entry.get_redirect_entry()
-    item = entry.get_item()
-    return Article(entry.path, entry.title, item.mimetype, bytes(item.content))
+    entry = resolve_redirects(entry)
+    if entry is None:
+        return None
+    try:
+        item = entry.get_item()
+        return Article(entry.path, entry.title, item.mimetype, bytes(item.content))
+    except (RuntimeError, OSError, KeyError):
+        return None
