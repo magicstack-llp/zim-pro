@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -14,6 +14,13 @@ class Config(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8080
     admin_token: str | None = Field(default=None, min_length=1)
+
+    @field_validator("admin_token", mode="before")
+    @classmethod
+    def _empty_token_is_none(cls, value: object) -> object:
+        # Docker Compose `KIWIX_ADMIN_TOKEN: ${ADMIN_TOKEN:-}` passes "" when unset.
+        return None if value == "" else value
+
     catalog_url: str = "https://library.kiwix.org/catalog/v2/entries"
     web_dir: Path | None = None
     # A Redis server to hold the queues of downloads, builds and feed syncs, and a copy of

@@ -6,7 +6,6 @@ import time
 
 import pytest
 from fastapi.testclient import TestClient
-from pydantic import ValidationError
 
 from zim_pro import access
 from zim_pro.config import Config
@@ -204,8 +203,7 @@ def test_f7_check_constraints_reject_invalid_values():
 
 
 def test_f8_admin_token_validation_and_case_insensitive_bearer(tmp_path):
-    with pytest.raises(ValidationError):
-        Config(admin_token="")
+    assert Config(admin_token="").admin_token is None
 
     app = create_app(
         Config(
