@@ -46,7 +46,12 @@ def test_f1_lifespan_awaits_scan_thread_before_closing_db(tmp_path, monkeypatch)
         original_close()
 
     async def fake_run(_ctx):
-        await asyncio.to_thread(ctx.scanner.scan)
+        fut = asyncio.ensure_future(asyncio.to_thread(ctx.scanner.scan))
+        try:
+            await asyncio.shield(fut)
+        except asyncio.CancelledError:
+            await fut
+            raise
 
     async def failing_stop():
         raise RuntimeError("boom during stop")
