@@ -37,6 +37,7 @@ LOW_DISK_WARN = 5 * 1024**3
 LOW_DISK_FAIL = 1024**3
 KEEP_DURATIONS = 500
 KEEP_HOSTS = 200
+KEEP_ROUTES = 100
 
 
 def _percentile(values: list[float], share: float) -> float:
@@ -90,6 +91,8 @@ class Metrics:
 
     def request(self, group: str, status: int, seconds: float) -> None:
         with self._lock:
+            if group not in self.requests and len(self.requests) >= KEEP_ROUTES:
+                group = "/api/other" if group.startswith("/api/") else "other"
             self.requests.setdefault(group, _Route()).add(seconds, status >= 500)
             self.totals["requests"] += 1
             self.totals["request_errors"] += status >= 500
@@ -122,8 +125,22 @@ class Metrics:
                 entry["last_error"] = error[:200]
 
     def ai_call(self, provider: str, ok: bool, seconds: float) -> None:
+        key = provider or "?"
         with self._lock:
-            self.ai.setdefault(provider or "?", _Route()).add(seconds, not ok)
+            if key not in self.ai and len(self.ai) >= KEEP_ROUTES:
+                key = "other"
+            self.ai.setdefault(key, _Route()).add(seconds, not ok)
+
+    def record_lag(self, lag: float) -> None:
+        with self._lock:
+            self.lag_now = lag
+            self.lag_worst = max(self.lag_worst, lag)
+
+    def take_lag(self) -> float:
+        with self._lock:
+            lag = self.lag_worst
+            self.lag_worst = 0.0
+            return lag
 
     def view(self) -> dict[str, Any]:
         with self._lock:
@@ -166,13 +183,17 @@ class Monitor:
         self.day: deque[dict[str, Any]] = deque(maxlen=DAY_POINTS)
         self._minute: list[dict[str, Any]] = []
         self._process = psutil.Process()
-        self._process.cpu_percent(None)
-        psutil.cpu_percent(None)
+        try:
+            self._process.cpu_percent(None)
+            psutil.cpu_percent(None)
+        except (psutil.Error, OSError):
+            pass
         self._last_totals = dict(metrics.totals)
         self._last_bytes = 0
         self._last_logs = dict(hub.counts)
         self._moved: dict[str, tuple[Any, float]] = {}  # job -> (what it last showed, when)
         self.stalled: dict[str, float] = {}  # job -> since when
+        self._watch_lock = threading.Lock()
         self._tasks: list[asyncio.Task[None]] = []
 
     async def start(self) -> None:
@@ -193,8 +214,7 @@ class Monitor:
             expected = loop.time() + LAG_EVERY
             await asyncio.sleep(LAG_EVERY)
             lag = max(0.0, loop.time() - expected)
-            metrics.lag_now = lag
-            metrics.lag_worst = max(metrics.lag_worst, lag)
+            metrics.record_lag(lag)
 
     async def _sample_loop(self) -> None:
         while True:
@@ -227,7 +247,7 @@ class Monitor:
         errors -= self._last_logs.get("ERROR", 0) + self._last_logs.get("CRITICAL", 0)
         warnings = counts.get("WARNING", 0) - self._last_logs.get("WARNING", 0)
         self._last_logs = counts
-        lag, metrics.lag_worst = metrics.lag_worst, 0.0
+        lag = metrics.take_lag()
         queues = self.queue_counts()
         return {
             "t": round(time.time()),
@@ -281,29 +301,27 @@ class Monitor:
 
     def _watch_jobs(self) -> None:
         now = time.monotonic()
-        seen: set[str] = set()
+        observations: list[tuple[str, Any, bool]] = []
         for name, manager in (("build", self.ctx.builds), ("feed", self.ctx.feeds)):
             for job_id, active in list(manager._active.items()):
-                reporter = active.reporter
-                key = f"{name} {job_id}"
-                seen.add(key)
-                snap = reporter.snapshot()
-                waiting = bool(snap["detail"]) or reporter.paused.is_set()
-                self._check_moved(
-                    key,
+                snap = active.reporter.snapshot()
+                waiting = bool(snap["detail"]) or active.reporter.paused.is_set()
+                observations.append((
+                    f"{name} {job_id}",
                     (snap["phase"], snap["done"], snap["total"], snap["failed"], snap["skipped"]),
-                    now,
                     waiting,
-                )
+                ))
         for job_id, active in list(self.ctx.downloads._active.items()):
-            key = f"download {job_id}"
-            seen.add(key)
             done = active.download.bytes_done if active.download else 0
-            self._check_moved(key, done, now, False)
-        for key in list(self._moved):
-            if key not in seen:
-                del self._moved[key]
-                self.stalled.pop(key, None)
+            observations.append((f"download {job_id}", done, False))
+        seen = {key for key, _, _ in observations}
+        with self._watch_lock:
+            for key, shows, waiting in observations:
+                self._check_moved(key, shows, now, waiting)
+            for key in list(self._moved):
+                if key not in seen:
+                    del self._moved[key]
+                    self.stalled.pop(key, None)
 
     def _check_moved(self, key: str, shows: Any, now: float, waiting: bool) -> None:
         last = self._moved.get(key)
@@ -325,23 +343,49 @@ class Monitor:
 
     def quiet_for(self, key: str) -> float | None:
         """Seconds since the job last moved, if it is being watched."""
-        last = self._moved.get(key)
+        with self._watch_lock:
+            last = self._moved.get(key)
         return time.monotonic() - last[1] if last else None
+
+    def is_stalled(self, key: str) -> bool:
+        with self._watch_lock:
+            return key in self.stalled
 
     # -- what Settings shows -------------------------------------------------------------
 
     def snapshot(self, network: dict[str, Any], span: str = "1h") -> dict[str, Any]:
         ctx = self.ctx
         process = self._process
-        with process.oneshot():
-            rss = process.memory_info().rss
-            threads = process.num_threads()
-            try:
-                files = process.num_fds()
-            except (AttributeError, psutil.Error):
-                files = None
-            created = process.create_time()
-        memory = psutil.virtual_memory()
+        rss = 0
+        threads = 0
+        files = None
+        created = self.started
+        try:
+            with process.oneshot():
+                rss = process.memory_info().rss
+                threads = process.num_threads()
+                try:
+                    files = process.num_fds()
+                except (AttributeError, psutil.Error, OSError):
+                    files = None
+                created = process.create_time()
+        except (psutil.Error, OSError):
+            pass
+        try:
+            memory = psutil.virtual_memory()
+            memory_total: int | None = memory.total
+            memory_used: int | None = memory.total - memory.available
+            memory_percent: float | None = memory.percent
+        except (psutil.Error, OSError):
+            memory_total = memory_used = memory_percent = None
+        try:
+            cpus = psutil.cpu_count()
+        except (psutil.Error, OSError):
+            cpus = None
+        try:
+            booted: float | None = psutil.boot_time()
+        except (psutil.Error, OSError):
+            booted = None
         try:
             load = [round(x, 2) for x in os.getloadavg()]
         except (AttributeError, OSError):
@@ -383,13 +427,13 @@ class Monitor:
                 "listeners": len(ctx.events._subscribers),
             },
             "system": {
-                "cpus": psutil.cpu_count(),
+                "cpus": cpus,
                 "cpu": self.hour[-1]["system_cpu"] if self.hour else 0,
-                "memory_total": memory.total,
-                "memory_used": memory.total - memory.available,
-                "memory": memory.percent,
+                "memory_total": memory_total,
+                "memory_used": memory_used,
+                "memory": memory_percent,
                 "load": load,
-                "booted": psutil.boot_time(),
+                "booted": booted,
             },
             "disks": disks,
             "database": {
@@ -432,12 +476,16 @@ class Monitor:
             "fail" if lag > 2000 else "warn" if lag > 500 else "ok",
             f"The server was up to {lag:.0f} ms late in the last minute",
         )
-        memory = psutil.virtual_memory().percent
-        add(
-            "Memory",
-            "fail" if memory > 95 else "warn" if memory > 85 else "ok",
-            f"{memory:.0f}% of the machine's memory in use",
-        )
+        try:
+            memory = psutil.virtual_memory().percent
+        except (psutil.Error, OSError) as exc:
+            add("Memory", "warn", f"Cannot be read: {exc}")
+        else:
+            add(
+                "Memory",
+                "fail" if memory > 95 else "warn" if memory > 85 else "ok",
+                f"{memory:.0f}% of the machine's memory in use",
+            )
         broker = ctx.broker.info()
         if broker["kind"] == "redis":
             add(
@@ -476,7 +524,8 @@ class Monitor:
             "warn" if catalog_error else "ok",
             catalog_error or (f"Refreshed {_ago(refreshed)}" if refreshed else "Not loaded yet"),
         )
-        stuck = sorted(self.stalled)
+        with self._watch_lock:
+            stuck = sorted(self.stalled)
         add(
             "Jobs",
             "warn" if stuck else "ok",

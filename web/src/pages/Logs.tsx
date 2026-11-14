@@ -97,12 +97,15 @@ export default function Logs({ onKeepLevel }: { onKeepLevel: (level: string) => 
     [level, area, job, query],
   );
 
+  const filterGen = useRef(0);
+
   // A new set of filters: start again from the newest lines.
   useEffect(() => {
-    let gone = false;
-    api<LogPage>(params({}))
+    const gen = ++filterGen.current;
+    const controller = new AbortController();
+    api<LogPage>(params({}), { signal: controller.signal })
       .then((page) => {
-        if (gone) return;
+        if (controller.signal.aborted || gen !== filterGen.current) return;
         const { lines: got, ...rest } = page;
         setLines(got);
         setInfo(rest);
@@ -110,19 +113,23 @@ export default function Logs({ onKeepLevel }: { onKeepLevel: (level: string) => 
         newest.current = page.newest;
         setProblem(null);
       })
-      .catch((reason) => !gone && setProblem(String(reason.message ?? reason)));
-    return () => {
-      gone = true;
-    };
+      .catch((reason) => !controller.signal.aborted && gen === filterGen.current && setProblem(String((reason as Error).message ?? reason)));
+    return () => controller.abort();
   }, [params]);
 
   // Live: every two seconds, what was logged since.
   useEffect(() => {
     if (!live) return;
+    const gen = filterGen.current;
+    let active: AbortController | null = null;
     const timer = window.setInterval(() => {
       if (document.visibilityState !== "visible" || !newest.current) return;
-      api<LogPage>(params({ after: newest.current }))
+      active?.abort();
+      const controller = new AbortController();
+      active = controller;
+      api<LogPage>(params({ after: newest.current }), { signal: controller.signal })
         .then((page) => {
+          if (controller.signal.aborted || gen !== filterGen.current) return;
           const { lines: got, ...rest } = page;
           newest.current = page.newest;
           setInfo(rest);
@@ -130,7 +137,10 @@ export default function Logs({ onKeepLevel }: { onKeepLevel: (level: string) => 
         })
         .catch(() => {});
     }, 2000);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      active?.abort();
+    };
   }, [live, params]);
 
   // Typing settles before the server is asked.
@@ -142,9 +152,16 @@ export default function Logs({ onKeepLevel }: { onKeepLevel: (level: string) => 
   const older = async () => {
     const oldest = lines[lines.length - 1]?.id;
     if (!oldest) return;
-    const page = await api<LogPage>(params({ before: oldest }));
-    setLines((current) => [...current, ...page.lines]);
-    setMore(page.lines.length >= PAGE);
+    const gen = filterGen.current;
+    setProblem(null);
+    try {
+      const page = await api<LogPage>(params({ before: oldest }));
+      if (gen !== filterGen.current) return;
+      setLines((current) => [...current, ...page.lines]);
+      setMore(page.lines.length >= PAGE);
+    } catch (reason) {
+      if (gen === filterGen.current) setProblem(String((reason as Error).message));
+    }
   };
   const download = async () => {
     setProblem(null);
@@ -155,15 +172,20 @@ export default function Logs({ onKeepLevel }: { onKeepLevel: (level: string) => 
       link.href = URL.createObjectURL(await response.blob());
       link.download = /filename="([^"]+)"/.exec(response.headers.get("content-disposition") ?? "")?.[1] ?? "zim-pro-logs.jsonl";
       link.click();
-      URL.revokeObjectURL(link.href);
+      setTimeout(() => URL.revokeObjectURL(link.href), 1000);
     } catch (reason) {
       setProblem(`The logs could not be downloaded: ${(reason as Error).message}`);
     }
   };
   const clear = async () => {
     if (!window.confirm("Empty this list? The log files keep every line.")) return;
-    await post("/api/logs/clear");
-    setLines([]);
+    setProblem(null);
+    try {
+      await post("/api/logs/clear");
+      setLines([]);
+    } catch (reason) {
+      setProblem(String((reason as Error).message));
+    }
   };
   const keep = async (value: string) => {
     setProblem(null);

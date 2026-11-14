@@ -117,6 +117,7 @@ export function McpAccess() {
   const [data, setData] = useState<McpKeys | null>(null);
   const [problem, setProblem] = useState<string | null>(null);
   const [name, setName] = useState("");
+  const [creating, setCreating] = useState(false);
   const [fresh, setFresh] = useState<(McpKey & { key: string }) | null>(null);
   const address = `${window.location.origin}/mcp`;
   const run = (request: Promise<McpKeys>) => {
@@ -154,12 +155,24 @@ export function McpAccess() {
           <div className="min-w-0 flex-1 basis-64">
             <h2 className="font-medium">API keys</h2>
             <p className="muted text-xs">
-              {data?.locked
-                ? "The MCP address answers only to a caller with one of these keys" + (data.admin_token ? ", or with the admin token." : ".")
-                : "No key has been made, so anyone who can reach this server can use the MCP address. Making the first key locks it."}
+              {!data
+                ? "Checking MCP access…"
+                : data.locked
+                  ? "The MCP address answers only to a caller with one of these keys" + (data.admin_token ? ", or with the admin token." : ".")
+                  : "No key has been made, so anyone who can reach this server can use the MCP address. Making the first key locks it."}
             </p>
           </div>
-          <span className={`badge ${data?.locked ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300" : "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"}`}>{data?.locked ? "Locked" : "Open"}</span>
+          <span
+            className={`badge ${
+              !data
+                ? "bg-zinc-100 text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300"
+                : data.locked
+                  ? "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300"
+                  : "bg-amber-50 text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+            }`}
+          >
+            {!data ? "Checking…" : data.locked ? "Locked" : "Open"}
+          </span>
         </div>
         <ErrorNote message={problem} />
         {fresh && (
@@ -183,11 +196,17 @@ export function McpAccess() {
           className="flex flex-wrap items-center gap-2 py-3"
           onSubmit={(event) => {
             event.preventDefault();
-            run(post<McpKeys>("/api/mcp/keys", { name })).then(() => setName(""));
+            if (creating) return;
+            setCreating(true);
+            run(post<McpKeys>("/api/mcp/keys", { name }))
+              .then(() => setName(""))
+              .finally(() => setCreating(false));
           }}
         >
           <input className="input min-w-0 flex-1 basis-56" placeholder="What the key is for, such as “Claude on my laptop”" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} aria-label="Name for the new key" />
-          <button className="btn btn-primary">Generate key</button>
+          <button className="btn btn-primary" disabled={creating}>
+            {creating ? "Generating…" : "Generate key"}
+          </button>
         </form>
         {data && data.keys.length > 0 && (
           <ul className="divide-y divide-zinc-100 dark:divide-zinc-800">

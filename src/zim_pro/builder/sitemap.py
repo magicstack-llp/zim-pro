@@ -6,12 +6,13 @@ text with one address per line, or either of those gzipped.
 """
 
 import gzip
-import html
 import io
 import re
+from xml.etree import ElementTree
 
 MAX_FILES = 50  # sitemap files read per host
 MAX_BYTES = 60 * 1024 * 1024  # the protocol's own limit is 50 MB unpacked
+MAX_URLS = 50_000  # cap per sitemap file so hostile documents cannot exhaust memory/time
 # Where a sitemap is usually found when robots.txt does not say. Most likely first.
 USUAL_PATHS = (
     "/sitemap.xml",
@@ -30,10 +31,25 @@ USUAL_PATHS = (
     "/post-sitemap.xml",
     "/page-sitemap.xml",
 )
-_LOC = re.compile(
-    rb"<(?:\w+:)?loc\b[^>]*>\s*(?:<!\[CDATA\[)?\s*(.*?)\s*(?:\]\]>)?\s*</(?:\w+:)?loc>", re.S | re.I
-)
-_INDEX_ENTRY = re.compile(rb"<(?:\w+:)?sitemap\b[^>]*>(.*?)</(?:\w+:)?sitemap>", re.S | re.I)
+
+
+def _iter_locs(data: bytes) -> list[str]:
+    """Stream ``<loc>`` text values from XML without building a DOM or backtracking."""
+    locs: list[str] = []
+    try:
+        for _, elem in ElementTree.iterparse(io.BytesIO(data), events=("end",)):
+            tag = elem.tag.rsplit("}", 1)[-1].lower()
+            if tag == "loc":
+                text = (elem.text or "").strip()
+                if text:
+                    locs.append(text)
+                    if len(locs) >= MAX_URLS:
+                        break
+            if tag in ("url", "sitemap", "loc"):
+                elem.clear()
+    except ElementTree.ParseError:
+        pass
+    return locs
 
 
 def listed_in_robots(text: str) -> list[str]:
@@ -64,15 +80,11 @@ def parse(data: bytes) -> tuple[list[str], list[str]]:
     if b"<html" in head or b"<!doctype html" in head:
         return [], []  # an error page served in place of the file
 
-    def text(raw: bytes) -> str:
-        return html.unescape(raw.decode("utf-8", "replace")).strip()
-
     if b"<sitemapindex" in data[:5000].lower():
-        children = [m.group(1) for entry in _INDEX_ENTRY.findall(data) if (m := _LOC.search(entry))]
-        return [text(c) for c in children], []
+        return _iter_locs(data), []
     if b"<urlset" in data[:5000].lower() or b"<loc" in head:
-        return [], [text(m) for m in _LOC.findall(data)]
+        return [], _iter_locs(data)
     if b"<" in head:
         return [], []  # some other XML, such as a feed
     lines = (line.strip() for line in data.decode("utf-8", "replace").splitlines())
-    return [], [line for line in lines if re.match(r"https?://\S+$", line)]
+    return [], [line for line in lines if re.match(r"https?://\S+$", line)][:MAX_URLS]

@@ -133,7 +133,7 @@ function BrokerCard({ broker }: { broker: Broker }) {
   );
 }
 
-function QueueCard({ queue, act, onConcurrency }: { queue: Queue; act: (path: string, method?: string, body?: unknown) => Promise<void>; onConcurrency: (value: number) => Promise<void> }) {
+function QueueCard({ queue, act, onConcurrency }: { queue: Queue; act: (path: string, method?: string, body?: unknown) => Promise<unknown>; onConcurrency: (value: number) => Promise<void> }) {
   const base = `/api/queues/${queue.name}`;
   const job = (id: number, action: string) => act(`${base}/jobs/${id}/${action}`);
   const hourLabel = (t: number) => new Date(t * 1000).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" });
@@ -328,18 +328,21 @@ export default function Queues({ onSetting }: { onSetting: (patch: Record<string
   const [problem, setProblem] = useState<string | null>(null);
 
   const replace = (queue: Queue) => setData((current) => current && { ...current, queues: current.queues.map((q) => (q.name === queue.name ? queue : q)) });
-  const act = async (path: string, method = "POST", body?: unknown) => {
+  const act = async (path: string, method = "POST", body?: unknown): Promise<boolean> => {
     setProblem(null);
     try {
       const result = await api<Queue | { queue: Queue }>(path, { method, body: body === undefined ? undefined : JSON.stringify(body) });
       replace("queue" in result ? result.queue : result);
+      return true;
     } catch (reason) {
       setProblem(String((reason as Error).message));
+      return false;
     }
   };
   const concurrency = (queue: Queue) => async (value: number) => {
-    await act(`/api/queues/${queue.name}/concurrency`, "PUT", { value });
-    onSetting({ [SETTING_OF[queue.name]]: value });
+    if (await act(`/api/queues/${queue.name}/concurrency`, "PUT", { value })) {
+      onSetting({ [SETTING_OF[queue.name]]: value });
+    }
   };
   if (!data) return <ErrorNote message={error} />;
   return (

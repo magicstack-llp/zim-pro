@@ -136,7 +136,7 @@ def _links(ctx: Context) -> list[dict[str, Any]]:
         r["source_id"]: r
         for r in ctx.db.all(
             "SELECT source_id, id, state, error, failed, skipped FROM builds "
-            "WHERE kind = 'link' ORDER BY id"
+            "WHERE id IN (SELECT MAX(id) FROM builds WHERE kind = 'link' GROUP BY source_id)"
         )
     }
     for row in rows:
@@ -179,6 +179,12 @@ def edit_link(link_id: int, body: LinkBody, ctx: Context = Depends(get_context))
 @router.delete("/links/{link_id}")
 def delete_link(link_id: int, ctx: Context = Depends(get_context)) -> dict[str, Any]:
     """Remove a link from the directory; the ZIM built from it stays in the library."""
+    for build in ctx.db.all(
+        "SELECT id FROM builds WHERE kind = 'link' AND source_id = ? "
+        "AND state IN ('queued', 'processing', 'paused')",
+        (link_id,),
+    ):
+        ctx.builds.cancel(build["id"])
     ctx.db.execute("DELETE FROM links WHERE id = ?", (link_id,))
     icons.path(ctx.config.state_dir, "link", link_id).unlink(missing_ok=True)
     _refile(ctx)
@@ -381,7 +387,7 @@ def _uploads(ctx: Context) -> list[dict[str, Any]]:
         r["source_id"]: r
         for r in ctx.db.all(
             "SELECT source_id, id, state, error, failed, skipped FROM builds "
-            "WHERE kind = 'upload' ORDER BY id"
+            "WHERE id IN (SELECT MAX(id) FROM builds WHERE kind = 'upload' GROUP BY source_id)"
         )
     }
     for row in rows:
@@ -470,6 +476,12 @@ def build_upload(
 @router.delete("/uploads/{upload_id}")
 def delete_upload(upload_id: int, ctx: Context = Depends(get_context)) -> dict[str, Any]:
     """Forget an uploaded file; the ZIM made from it stays in the library."""
+    for build in ctx.db.all(
+        "SELECT id FROM builds WHERE kind = 'upload' AND source_id = ? "
+        "AND state IN ('queued', 'processing', 'paused')",
+        (upload_id,),
+    ):
+        ctx.builds.cancel(build["id"])
     row = ctx.db.one("SELECT path FROM uploads WHERE id = ?", (upload_id,))
     if row:
         Path(row["path"]).unlink(missing_ok=True)

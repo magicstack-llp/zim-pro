@@ -1,3 +1,4 @@
+import logging
 import re
 from typing import Any
 
@@ -7,13 +8,18 @@ from libzim.suggestion import SuggestionSearcher
 
 from .reader import html_to_text
 
+log = logging.getLogger(__name__)
+
 SNIPPET_CHARS = 240
+MAX_SNIPPET_BYTES = 256_000
+MAX_SNIPPET_HITS = 20
 
 
 def _title(archive: Archive, path: str) -> str:
     try:
         return archive.get_entry_by_path(path).title or path
-    except Exception:
+    except (RuntimeError, OSError, KeyError) as exc:
+        log.debug("title lookup failed for %s: %s", path, exc)
         return path
 
 
@@ -45,8 +51,10 @@ def search_book(
         hits = [{"path": p, "title": _title(archive, p)} for p in results.getResults(start, count)]
         mode = "title"
     if snippets:
-        for hit in hits:
+        for hit in hits[:MAX_SNIPPET_HITS]:
             hit["snippet"] = snippet(archive, hit["path"], query)
+        for hit in hits[MAX_SNIPPET_HITS:]:
+            hit["snippet"] = ""
     return {"total": total, "mode": mode, "results": hits}
 
 
@@ -54,10 +62,11 @@ def snippet(archive: Archive, path: str, query: str) -> str:
     """A short extract of the article around the first query term found."""
     try:
         item = archive.get_entry_by_path(path).get_item()
-        if not item.mimetype.startswith("text/html") or item.size > 4_000_000:
+        if not item.mimetype.startswith("text/html") or item.size > MAX_SNIPPET_BYTES:
             return ""
         text = html_to_text(bytes(item.content))
-    except Exception:
+    except (RuntimeError, OSError, KeyError) as exc:
+        log.debug("snippet failed for %s: %s", path, exc)
         return ""
     terms = [t for t in re.findall(r"\w+", query.lower()) if len(t) > 2]
     lowered = text.lower()

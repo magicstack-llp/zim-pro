@@ -1,8 +1,7 @@
 import asyncio
-import hmac
 import logging
 import time
-from contextlib import asynccontextmanager
+from contextlib import asynccontextmanager, suppress
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -16,8 +15,8 @@ from .api import feeds as feeds_api
 from .api import network as network_api
 from .builder.jobs import BuildManager
 from .config import Config
-from .context import Context
-from .db import Database
+from .context import Context, bearer_token, is_admin_token
+from .db import Database, StartupError
 from .downloads.manager import DownloadManager
 from .events import EventBus
 from .feeds.manager import FeedManager
@@ -36,6 +35,13 @@ LOG_FLUSH_SECONDS = 1
 
 
 def build_context(config: Config) -> Context:
+    try:
+        config.data_dir.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise StartupError(
+            f"Cannot use library directory {config.data_dir}: {exc}. "
+            "The data directory must exist or be creatable by the user this server runs as."
+        ) from exc
     db = Database(config.db_path)
     logs.setup(str(db.get_setting("log_level")), config.state_dir / "logs")
     broker = make_broker(db, config.redis_url)
@@ -80,40 +86,54 @@ def create_app(config: Config | None = None) -> FastAPI:
     async def lifespan(app: FastAPI):
         ctx.events.bind(asyncio.get_running_loop())
         log.info("Zim Pro is starting: library %s, state %s", config.data_dir, config.state_dir)
-        result = await asyncio.to_thread(ctx.scanner.scan)
-        log.info("library scanned: %s", result)
-        await ctx.downloads.start()
-        await ctx.builds.start()
-        await ctx.feeds.start()
-        assert ctx.monitor is not None
-        await ctx.monitor.start()
-        background = asyncio.create_task(scheduler.run(ctx))
-        shipping = asyncio.create_task(send_logs(ctx))
-        async with mcp.session_manager.run():
-            yield
-        log.info("Zim Pro is stopping")
-        background.cancel()
-        shipping.cancel()
-        await ctx.monitor.stop()
-        await ctx.feeds.stop()
-        await ctx.builds.stop()
-        await ctx.downloads.stop()
-        ctx.broker.close()
-        ctx.db.close()
+        tasks: list[asyncio.Task[None]] = []
+        try:
+            result = await asyncio.to_thread(ctx.scanner.scan)
+            log.info("library scanned: %s", result)
+            await ctx.downloads.start()
+            await ctx.builds.start()
+            await ctx.feeds.start()
+            assert ctx.monitor is not None
+            await ctx.monitor.start()
+            tasks.append(asyncio.create_task(scheduler.run(ctx)))
+            tasks.append(asyncio.create_task(send_logs(ctx)))
+            async with mcp.session_manager.run():
+                yield
+        finally:
+            log.info("Zim Pro is stopping")
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            for stopper in (
+                ctx.monitor.stop if ctx.monitor is not None else None,
+                ctx.feeds.stop,
+                ctx.builds.stop,
+                ctx.downloads.stop,
+            ):
+                if stopper is not None:
+                    try:
+                        await stopper()
+                    except Exception:
+                        log.exception("Error stopping %s", stopper)
+            ctx.events.unbind()
+            with suppress(Exception):
+                ctx.pool.clear()
+            with suppress(Exception):
+                ctx.broker.close()
+            with suppress(Exception):
+                ctx.db.close()
 
     app = FastAPI(title="Zim Pro", lifespan=lifespan, docs_url="/api/docs", redoc_url=None)
     app.state.ctx = ctx
 
     @app.middleware("http")
     async def mcp_auth(request: Request, call_next):
-        # /mcp is open until it is given a lock: the admin token, or a key made in Settings.
+        # /mcp always requires a valid admin token or an MCP key created in Settings.
         if request.url.path.startswith("/mcp"):
-            locked = bool(config.admin_token) or access.has_keys(ctx.db)
-            supplied = request.headers.get("authorization", "").removeprefix("Bearer ").strip()
-            is_admin = bool(config.admin_token) and hmac.compare_digest(
-                supplied.encode(), config.admin_token.encode()
-            )
-            if locked and not is_admin and not access.check_key(ctx.db, supplied):
+            supplied = bearer_token(request)
+            is_admin = is_admin_token(supplied, config.admin_token)
+            if not is_admin and not await asyncio.to_thread(access.check_key, ctx.db, supplied):
                 return JSONResponse(
                     {"detail": "An MCP key is required: Authorization: Bearer <key>"},
                     401,
@@ -171,15 +191,19 @@ def create_app(config: Config | None = None) -> FastAPI:
 
     web_dir = find_web_dir(config)
     if web_dir:
-        app.mount("/assets", StaticFiles(directory=web_dir / "assets"), name="assets")
+        assets_dir = web_dir / "assets"
+        if assets_dir.is_dir():
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
         @app.get("/{path:path}", include_in_schema=False)
         def spa(path: str):
-            if path.startswith(("api/", "content/", "mcp")):
+            if path in ("api", "content", "mcp") or path.startswith(("api/", "content/", "mcp/")):
                 raise HTTPException(404)
             file = (web_dir / path).resolve()
             if path and file.is_file() and web_dir.resolve() in file.parents:
                 return FileResponse(file)
+            if path in ("favicon.ico", "robots.txt"):
+                raise HTTPException(404)
             return FileResponse(web_dir / "index.html", headers={"Cache-Control": "no-cache"})
 
     return app

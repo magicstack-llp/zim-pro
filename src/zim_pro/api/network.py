@@ -1,6 +1,6 @@
 """The VPN and the captcha solver: what they report, and asking the VPN for a new address."""
 
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -31,7 +31,7 @@ async def change_ip(ctx: Context = Depends(get_context)) -> dict[str, Any]:
 class TestBody(BaseModel):
     """What is in the form right now, saved or not."""
 
-    kind: str = "vpn"
+    kind: Literal["vpn", "solver"] = "vpn"
     build_proxy: str = Field(default="", max_length=2000)
     vpn_control_url: str = Field(default="", max_length=2000)
     vpn_control_key: str = Field(default="", max_length=2000)

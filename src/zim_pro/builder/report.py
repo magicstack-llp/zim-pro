@@ -67,9 +67,15 @@ class Reporter:
         self._changed()
 
     def _note(self, kind: str, target: str, why: str) -> None:
+        entry = {"kind": kind, "target": target[:500], "why": why[:300]}
         with self._lock:
-            if len(self.log) < LOG_LIMIT:
-                self.log.append({"kind": kind, "target": target[:500], "why": why[:300]})
+            if len(self.log) >= LOG_LIMIT:
+                drop = next(
+                    (i for i, item in enumerate(self.log) if item["kind"] != "failed"),
+                    0,
+                )
+                del self.log[drop]
+            self.log.append(entry)
 
     def failed(self, target: str, why: str) -> None:
         self.failed_count += 1

@@ -52,12 +52,19 @@ async def act(download_id: int, action: str, ctx: Context = Depends(get_context)
             ctx.downloads.move(download_id, to_top=False)
         case _:
             raise HTTPException(404, "Unknown action")
-    return ctx.downloads.get(download_id) or {}
+    row = ctx.downloads.get(download_id)
+    if row is None:
+        raise HTTPException(404, "No such download")
+    return row
 
 
 @router.delete("/downloads/{download_id}", dependencies=[Depends(require_admin)])
 async def delete_download(download_id: int, ctx: Context = Depends(get_context)) -> dict[str, bool]:
-    ctx.downloads.remove(download_id)
+    outcome = await ctx.downloads.remove(download_id)
+    if outcome == "not_found":
+        raise HTTPException(404, "No such download")
+    if outcome == "conflict":
+        raise HTTPException(409, "Download cannot be removed in its current state")
     return {"ok": True}
 
 

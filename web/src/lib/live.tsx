@@ -11,10 +11,20 @@ interface Live {
   revision: number;
   /** Bumps whenever the VPN or the captcha solver changes: switched, or a new address. */
   network: number;
+  /** True when the live event stream is disconnected. */
+  offline: boolean;
   refresh: () => void;
 }
 
-const LiveContext = createContext<Live>({ downloads: [], builds: [], feeds: [], revision: 0, network: 0, refresh: () => {} });
+const LiveContext = createContext<Live>({ downloads: [], builds: [], feeds: [], revision: 0, network: 0, offline: false, refresh: () => {} });
+
+function safeParse<T>(raw: string): T | null {
+  try {
+    return JSON.parse(raw) as T;
+  } catch {
+    return null;
+  }
+}
 
 /** Keeps download progress and change notifications current over server-sent events. */
 export function LiveProvider({ children }: { children: ReactNode }) {
@@ -23,29 +33,58 @@ export function LiveProvider({ children }: { children: ReactNode }) {
   const [feeds, setFeeds] = useState<Build[]>([]);
   const [revision, setRevision] = useState(0);
   const [network, setNetwork] = useState(0);
-  const refresh = useCallback(() => {
-    api<Download[]>("/api/downloads").then(setDownloads).catch(() => {});
-    api<Build[]>("/api/build/jobs").then(setBuilds).catch(() => {});
-    api<Build[]>("/api/feeds/runs").then(setFeeds).catch(() => {});
-    setRevision((value) => value + 1);
+  const [offline, setOffline] = useState(false);
+  const hadError = useRef(false);
+
+  const syncLists = useCallback((signal?: AbortSignal) => {
+    api<Download[]>("/api/downloads", { signal }).then(setDownloads).catch(() => {});
+    api<Build[]>("/api/build/jobs", { signal }).then(setBuilds).catch(() => {});
+    api<Build[]>("/api/feeds/runs", { signal }).then(setFeeds).catch(() => {});
   }, []);
 
+  const refresh = useCallback(() => {
+    syncLists();
+    setRevision((value) => value + 1);
+  }, [syncLists]);
+
   useEffect(() => {
-    api<Download[]>("/api/downloads").then(setDownloads).catch(() => {});
-    api<Build[]>("/api/build/jobs").then(setBuilds).catch(() => {});
-    api<Build[]>("/api/feeds/runs").then(setFeeds).catch(() => {});
+    const controller = new AbortController();
+    syncLists(controller.signal);
     const source = new EventSource("/api/events");
-    source.addEventListener("builds", (event) => setBuilds(JSON.parse((event as MessageEvent).data)));
-    source.addEventListener("feeds", (event) => setFeeds(JSON.parse((event as MessageEvent).data)));
-    source.addEventListener("downloads", (event) => setDownloads(JSON.parse((event as MessageEvent).data)));
+    source.onopen = () => {
+      setOffline(false);
+      if (hadError.current) {
+        hadError.current = false;
+        refresh();
+      }
+    };
+    source.onerror = () => {
+      hadError.current = true;
+      setOffline(true);
+    };
+    source.addEventListener("builds", (event) => {
+      const parsed = safeParse<Build[]>((event as MessageEvent).data);
+      if (parsed) setBuilds(parsed);
+    });
+    source.addEventListener("feeds", (event) => {
+      const parsed = safeParse<Build[]>((event as MessageEvent).data);
+      if (parsed) setFeeds(parsed);
+    });
+    source.addEventListener("downloads", (event) => {
+      const parsed = safeParse<Download[]>((event as MessageEvent).data);
+      if (parsed) setDownloads(parsed);
+    });
     const bump = () => setRevision((value) => value + 1);
     source.addEventListener("library", bump);
     source.addEventListener("catalog", bump);
     source.addEventListener("network", () => setNetwork((value) => value + 1));
-    return () => source.close();
-  }, []);
+    return () => {
+      controller.abort();
+      source.close();
+    };
+  }, [refresh, syncLists]);
 
-  return <LiveContext.Provider value={{ downloads, builds, feeds, revision, network, refresh }}>{children}</LiveContext.Provider>;
+  return <LiveContext.Provider value={{ downloads, builds, feeds, revision, network, offline, refresh }}>{children}</LiveContext.Provider>;
 }
 
 export const useLive = () => useContext(LiveContext);
@@ -60,17 +99,28 @@ export function useData<T>(path: string | null, deps: unknown[] = []) {
   const latest = useRef(0);
 
   useEffect(() => {
-    if (path === null) return;
+    if (path === null) {
+      setLoading(false);
+      return;
+    }
+    const controller = new AbortController();
     const request = ++latest.current;
     setLoading(true);
-    api<T>(path)
+    api<T>(path, { signal: controller.signal })
       .then((result) => {
-        if (request !== latest.current) return;
+        if (controller.signal.aborted || request !== latest.current) return;
         setData(result);
         setError(null);
       })
-      .catch((reason) => request === latest.current && setError(String(reason.message ?? reason)))
-      .finally(() => request === latest.current && setLoading(false));
+      .catch((reason) => {
+        if (controller.signal.aborted || request !== latest.current) return;
+        setError(String((reason as Error).message ?? reason));
+      })
+      .finally(() => {
+        if (controller.signal.aborted || request !== latest.current) return;
+        setLoading(false);
+      });
+    return () => controller.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [path, revision, nonce, ...deps]);
 

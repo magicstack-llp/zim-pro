@@ -12,12 +12,15 @@ site that answers "too many requests" is given the pause it asks for, and a slow
 """
 
 import asyncio
+import codecs
 import email.utils
 import hashlib
+import ipaddress
 import json
 import logging
 import mimetypes
 import re
+import socket
 import time
 import urllib.robotparser
 from collections.abc import Awaitable, Callable
@@ -94,6 +97,7 @@ class Fetched:
     content_type: str
     file: Path
     cached: bool = False
+    charset: str = ""
 
     @property
     def is_html(self) -> bool:
@@ -223,7 +227,10 @@ class Fetcher:
         for client in [self.client, *self._retired]:
             await client.aclose()
         await self._solver_client.aclose()
-        self._index_file.write_text(json.dumps(self._index))
+        try:
+            self._index_file.write_text(json.dumps(self._index))
+        except OSError as exc:
+            log.warning("could not save crawl cache index: %s", exc)
 
     def _renew_client(self) -> None:
         """Go on with a new connection pool, keeping the cookies.
@@ -328,7 +335,14 @@ class Fetcher:
             return True
         if "html" not in reply.headers.get("content-type", ""):
             return False
-        body = (await reply.aread())[:40000].lower()
+        chunks: list[bytes] = []
+        total = 0
+        async for chunk in reply.aiter_bytes(8192):
+            chunks.append(chunk)
+            total += len(chunk)
+            if total >= 40_000:
+                break
+        body = b"".join(chunks)[:40_000].lower()
         return any(mark in body for mark in _CHALLENGE_MARKS)
 
     async def _solve(self, url: str) -> tuple[str, str]:
@@ -386,7 +400,9 @@ class Fetcher:
         known = self._index.get(url) if file.exists() else None
         if known and self.prefer_cache and not fresh:
             self.reused += 1
-            return Fetched(known["url"], known["type"], file, cached=True)
+            return Fetched(
+                known["url"], known["type"], file, cached=True, charset=known.get("charset", "")
+            )
         headers = {}
         solved: tuple[str, str] | None = None
         if known:
@@ -417,7 +433,13 @@ class Fetcher:
                         if reply.status_code == 304 and known:
                             self.reused += 1
                             self._went_well(host)
-                            return Fetched(known["url"], known["type"], file, cached=True)
+                            return Fetched(
+                                known["url"],
+                                known["type"],
+                                file,
+                                cached=True,
+                                charset=known.get("charset", ""),
+                            )
                         asked = _retry_after(reply.headers.get("retry-after", ""))
                         if reply.status_code == 429 or (
                             reply.status_code == 503 and asked is not None
@@ -444,19 +466,23 @@ class Fetcher:
                                     raise FetchError(f"larger than {limit // MB} MB")
                                 out.write(chunk)
                         partial.replace(file)
-                        kind = reply.headers.get("content-type", "").split(";")[0].strip().lower()
+                        raw_ct = reply.headers.get("content-type", "")
+                        kind = raw_ct.split(";")[0].strip().lower()
+                        charset_match = re.search(r"charset\s*=\s*['\"]?([\w-]+)", raw_ct, re.I)
+                        charset = charset_match.group(1) if charset_match else ""
                         if not kind or kind == "application/octet-stream":
                             kind = mimetypes.guess_type(urlsplit(url).path)[0] or kind
                         final = extract.normalise(str(reply.url)) or url
                         self._index[url] = {
                             "url": final,
                             "type": kind or "application/octet-stream",
+                            "charset": charset,
                             "etag": reply.headers.get("etag", ""),
                             "modified": reply.headers.get("last-modified", ""),
                         }
                         self.downloaded += size
                         self._went_well(host)
-                        return Fetched(final, self._index[url]["type"], file)
+                        return Fetched(final, self._index[url]["type"], file, charset=charset)
                 except _Challenge:
                     if not self.solver:
                         raise FetchError(
@@ -513,15 +539,90 @@ class Fetcher:
         raise FetchError(last_error)
 
 
-def _decode(data: bytes, content_type_header: str = "") -> str:
-    match = re.search(rb"<meta[^>]+charset=[\"']?([\w-]+)", data[:4096], re.I)
-    for encoding in (match.group(1).decode("ascii", "ignore") if match else "", "utf-8"):
+def _is_private_host(netloc: str) -> bool:
+    """True when ``netloc`` names a loopback, link-local, RFC1918 or internal host."""
+    host = urlsplit(f"//{netloc}").hostname or ""
+    host = host.strip(".").lower()
+    if not host:
+        return True
+    if host in ("localhost", "localhost.localdomain") or host.endswith(
+        (".localhost", ".local", ".internal")
+    ):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        return (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        )
+    except ValueError:
+        pass
+    try:
+        infos = socket.getaddrinfo(host, None, type=socket.SOCK_STREAM)
+    except OSError:
+        return False
+    for info in infos:
         try:
-            if encoding:
-                return data.decode(encoding)
+            ip = ipaddress.ip_address(info[4][0].split("%")[0])
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return True
+    return False
+
+
+def _decode(data: bytes, content_type_header: str = "") -> str:
+    for bom, enc in (
+        (codecs.BOM_UTF8, "utf-8-sig"),
+        (codecs.BOM_UTF32_LE, "utf-32"),
+        (codecs.BOM_UTF32_BE, "utf-32"),
+        (codecs.BOM_UTF16_LE, "utf-16"),
+        (codecs.BOM_UTF16_BE, "utf-16"),
+    ):
+        if data.startswith(bom):
+            try:
+                return data.decode(enc)
+            except UnicodeDecodeError:
+                break
+    header_match = re.search(r"charset\s*=\s*['\"]?([\w-]+)", content_type_header, re.I)
+    bare = content_type_header.strip()
+    header_enc = (
+        header_match.group(1)
+        if header_match
+        else (bare if re.fullmatch(r"[\w-]+", bare) else "")
+    )
+    head = data[:65536]
+    meta_match = (
+        re.search(rb"<meta[^>]+charset=[\"']?([\w-]+)", head, re.I)
+        or re.search(rb"<\?xml[^>]+encoding=[\"']([\w-]+)", head, re.I)
+        or re.search(rb"@charset\s+[\"']([\w-]+)[\"']", head[:4096], re.I)
+    )
+    meta_enc = meta_match.group(1).decode("ascii", "ignore") if meta_match else ""
+    for encoding in (header_enc, meta_enc, "utf-8", "cp1252"):
+        if not encoding:
+            continue
+        try:
+            return data.decode(encoding)
         except (LookupError, UnicodeDecodeError):
             continue
     return data.decode("utf-8", "replace")
+
+
+def _disambiguate_path(path: str, url: str) -> str:
+    stem, dot, ext = path.rpartition(".")
+    mark = "_" + hashlib.sha1(url.encode()).hexdigest()[:8]
+    return f"{stem}{mark}.{ext}" if dot and "/" not in ext else path + mark
 
 
 class Crawler:
@@ -577,6 +678,7 @@ class Crawler:
         self._sitemap_tasks: list[asyncio.Task[None]] = []
         self._slow_hosts: set[str] = set()
         self._missing: set[str] = set()  # files that could not be had before: not asked again
+        self._budget_noted = False
 
     # -- scope ----------------------------------------------------------------------
 
@@ -625,7 +727,7 @@ class Crawler:
 
     # -- robots.txt and sitemaps ----------------------------------------------------
 
-    async def _meet(self, scheme: str, netloc: str) -> None:
+    async def _meet(self, scheme: str, netloc: str, sitemaps: bool = True) -> None:
         """Learn a host's rules before anything else is asked of it. Once per host.
 
         With and without ``www.`` count as one host: its rules are read once, from the
@@ -638,7 +740,7 @@ class Crawler:
             listed = await task
             options = self.options
             crawl = options.scope != "page" and options.max_depth and not options.feeds_only
-            if options.sitemaps and crawl:
+            if sitemaps and options.sitemaps and crawl and self._same_site(netloc):
                 reading = asyncio.create_task(self._read_sitemaps(scheme, netloc, listed))
                 self._sitemap_tasks.append(reading)
         else:
@@ -657,7 +759,7 @@ class Crawler:
             return []
         if fetched.is_html:
             return []  # a "not found" page, not rules
-        text = _decode(fetched.file.read_bytes())
+        text = _decode(fetched.file.read_bytes(), fetched.charset)
         if self.options.respect_robots:
             parser = urllib.robotparser.RobotFileParser()
             parser.parse(text.splitlines())
@@ -704,6 +806,7 @@ class Crawler:
         room = self.options.max_pages * 2
         files = total = 0
         while todo and files < sitemap.MAX_FILES and len(pages) < room:
+            self.report.check()
             address = todo.pop(0)
             if address in read:
                 continue
@@ -772,6 +875,8 @@ class Crawler:
         tries: dict[str, int] = manifest.get("feed_tries", {})
         known = {self._key(page) for page in manifest["pages"]}
         articles = await self._feed_articles()
+        for parts in {urlsplit(u)[:2] for u in articles}:
+            await self._meet(*parts, sitemaps=False)
         fresh = [
             url
             for url in articles
@@ -856,10 +961,10 @@ class Crawler:
         queue = self.queue
         report.phase("reading the site's rules")
         seed = urlsplit(self.seed)
-        await self._meet(seed.scheme, seed.netloc)
+        await self._meet(seed.scheme, seed.netloc, sitemaps=not options.feed_urls)
         if not self.allowed(self.seed):
             raise BuildError("The site's robots.txt does not allow this address to be fetched.")
-        # The page that was asked for goes first; then what the sitemaps list.
+        # The page that was asked for goes first; then feed articles, then sitemaps.
         self.seen.add(self._key(self.seed))
         self._open += 1
         queue.put_nowait((self.seed, 0 if not options.feeds_only else options.max_depth))
@@ -868,19 +973,30 @@ class Crawler:
             await self._queue_from_feeds()
             page_limit = max(page_limit, self._open)  # news is added, never traded for old
         else:
-            await asyncio.gather(*self._sitemap_tasks)
             if options.feed_urls:
                 # What the feeds list now, and what they brought in before: a full build
                 # must not lose articles that have since dropped off the end of a feed.
                 articles = await self._feed_articles()
                 kept = [u for u in self._manifest().get("feed_pages", []) if u not in articles]
                 self._feed_new = set(articles) | set(kept)
-                for url in [*articles, *kept]:
+                feed_urls = [*articles, *kept]
+                for parts in {urlsplit(u)[:2] for u in feed_urls}:
+                    await self._meet(*parts, sitemaps=False)
+                for url in feed_urls:
                     key = self._key(url)
-                    if key not in self.seen and self.allowed(url):
+                    if key not in self.seen:
+                        if not self.allowed(url):
+                            self.report.skipped(url, "not allowed by robots.txt")
+                            continue
                         self.seen.add(key)
                         self._open += 1
                         queue.put_nowait((url, options.max_depth))
+                if options.sitemaps and options.scope != "page" and options.max_depth:
+                    listed = await self._met[seed.netloc.removeprefix("www.")]
+                    self._sitemap_tasks.append(
+                        asyncio.create_task(self._read_sitemaps(seed.scheme, seed.netloc, listed))
+                    )
+            await asyncio.gather(*self._sitemap_tasks)
         report.phase("fetching", min(page_limit, queue.qsize()))
         pages_done = 0
         limit_noted = False
@@ -905,7 +1021,14 @@ class Crawler:
                     report.progress(pages_done, max(1, min(page_limit, waiting)))
                     if depth < options.max_depth:
                         await self._offer_all(links, depth + 1)
-                except asyncio.CancelledError:
+                except (Cancelled, asyncio.CancelledError):
+                    while True:
+                        try:
+                            queue.get_nowait()
+                        except asyncio.QueueEmpty:
+                            break
+                        self._open -= 1
+                        queue.task_done()
                     raise
                 except Exception as exc:  # one bad page must not end the build
                     report.failed(url, str(exc) or type(exc).__name__)
@@ -969,12 +1092,17 @@ class Crawler:
             return None
         path = extract.zim_path(final)
         if path in self.page_urls:
-            self.saved[url] = path  # another address for a page already saved
-            return None
+            if self.page_urls[path] == final:
+                self.saved[url] = path  # another address for a page already saved
+                return None
+            path = _disambiguate_path(path, final)
+            if path in self.page_urls:
+                self.saved[url] = path
+                return None
         options = self.options
         prepared = await asyncio.to_thread(
             lambda: extract.prepare(
-                _decode(fetched.file.read_bytes()),
+                _decode(fetched.file.read_bytes(), fetched.charset),
                 final,
                 options.clean,
                 options.images,
@@ -984,9 +1112,18 @@ class Crawler:
         if not prepared.text.strip() and not prepared.resources:
             self.report.skipped(url, "the page has no content (it may need JavaScript)")
             return None
+        page_bytes = len(prepared.html.encode("utf-8")) + len(prepared.text.encode("utf-8"))
+        budget = options.max_total_mb * MB
+        if self.stage.pages and self.stage.size_estimate + page_bytes > budget:
+            if not self._budget_noted:
+                self._budget_noted = True
+                self.report.note(f"Stopped saving files at the {options.max_total_mb} MB limit.")
+            self.report.skipped(url, "over the size limit for this ZIM")
+            return None
         if prepared.fell_back:
             self.report.note("Kept the whole page: the article could not be told apart.", final)
         self.stage.add_page(path, prepared.title, prepared.html, prepared.text)
+        self.stage.size_estimate += page_bytes
         self.page_urls[path] = final
         self.fetched_pages.append(url)
         self.from_feeds += url in self._feed_new
@@ -1006,6 +1143,19 @@ class Crawler:
 
     # -- pictures, media, stylesheets and linked documents ---------------------------
 
+    async def _resource_allowed(self, address: str, note_skip: bool = True) -> bool:
+        parts = urlsplit(address)
+        if _is_private_host(parts.netloc) and parts.netloc.removeprefix("www.") != self.host:
+            if note_skip:
+                self.report.skipped(address, "private or local address")
+            return False
+        await self._meet(parts.scheme, parts.netloc, sitemaps=False)
+        if not self.allowed(address):
+            if note_skip:
+                self.report.skipped(address, "not allowed by robots.txt")
+            return False
+        return True
+
     async def _resources(self) -> None:
         options, report = self.options, self.report
         budget = options.max_total_mb * MB
@@ -1013,29 +1163,44 @@ class Crawler:
         pending = dict(self.resources)
         report.phase("fetching files", len(pending))
         done = 0
-        over_budget = False
 
         async def one(address: str, kind: str) -> None:
-            nonlocal done, over_budget
+            nonlocal done
             try:
-                report.check()
+                await report.gate()
                 if address in self.saved:
                     return
-                if self.stage.size_estimate > budget:
-                    if not over_budget:
-                        over_budget = True
+                if not await self._resource_allowed(address):
+                    return
+                if self.stage.size_estimate >= budget:
+                    if not self._budget_noted:
+                        self._budget_noted = True
                         report.note(f"Stopped saving files at the {options.max_total_mb} MB limit.")
                     report.skipped(address, "over the size limit for this ZIM")
                     return
                 limit = file_limit * (10 if kind == "media" else 1)
                 fetched = await self.fetcher.get(address, limit)
+                final_parts = urlsplit(fetched.url)
+                if (
+                    _is_private_host(final_parts.netloc)
+                    and final_parts.netloc.removeprefix("www.") != self.host
+                ):
+                    report.skipped(address, "private or local address")
+                    return
                 path = extract.zim_path(fetched.url)
+                if path in self.page_urls and self.page_urls[path] != fetched.url:
+                    path = _disambiguate_path(path, fetched.url)
                 if fetched.is_html and kind != "file":
                     report.skipped(address, "a web page was returned in place of the file")
                     return
                 if kind == "style":
-                    css = _decode(fetched.file.read_bytes())
-                    for extra in extract.css_resources(css, fetched.url):
+                    css, extras = await asyncio.to_thread(
+                        lambda f=fetched: (
+                            text := _decode(f.file.read_bytes(), f.charset),
+                            extract.css_resources(text, f.url),
+                        )
+                    )
+                    for extra in extras:
                         if extra not in pending and extra not in more:
                             more[extra] = "font" if not _PICTURES.search(extra) else "image"
                     styles[address] = (fetched.url, path, css)
@@ -1058,14 +1223,17 @@ class Crawler:
             report.progress(done, done + len(more))
             await asyncio.gather(*(one(a, k) for a, k in more.items()))
         for final, path, css in styles.values():
-            self.stage.add_resource(
-                path, "text/css", extract.localise_css(css, final, path, self.saved).encode()
-            )
+            css_bytes = extract.localise_css(css, final, path, self.saved).encode()
+            self.stage.add_resource(path, "text/css", css_bytes)
+            self.stage.size_estimate += len(css_bytes)
         await self._icon()
 
     async def _icon(self) -> None:
         """Take the first of the site's pictures that can be had and drawn."""
         for address in [a for a in self.icon_urls if a][:6]:
+            await self.report.gate()
+            if not await self._resource_allowed(address, note_skip=False):
+                continue
             try:
                 icon = await self.fetcher.get(address, 2 * MB)
             except FetchError:

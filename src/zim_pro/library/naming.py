@@ -1,6 +1,6 @@
 import re
 
-_DATE_SUFFIX = re.compile(r"_(\d{4}-\d{2}(?:-\d{2})?)[a-z]?$")
+_DATE_SUFFIX = re.compile(r"_(\d{4}-\d{2}(?:-\d{2})?)([a-z]?)$")
 
 
 _TAG_CATEGORY = re.compile(r"(?:^|;)_category:([^;]+)")
@@ -44,3 +44,12 @@ def split_filename(filename: str) -> tuple[str, str]:
     if not match:
         return base, ""
     return base[: match.start()], match.group(1)
+
+
+def filename_revision(filename: str) -> str:
+    """Return the trailing revision letter after the date suffix (e.g. 'a' for 2026-09a)."""
+    base = filename.rsplit("/", 1)[-1]
+    for suffix in (".meta4", ".part", ".zim"):
+        base = base.removesuffix(suffix)
+    match = _DATE_SUFFIX.search(base)
+    return match.group(2) if match else ""

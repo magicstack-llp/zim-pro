@@ -150,23 +150,39 @@ class LogHub(logging.Handler):
 
     def _read_back(self, path: Path) -> None:
         """The lines from before a restart: the Logs section shows them too."""
-        try:
-            with path.open("rb") as handle:
-                handle.seek(0, 2)
-                handle.seek(max(0, handle.tell() - 4 * 1024 * 1024))
-                tail = handle.read().decode("utf-8", "replace").splitlines()[-KEEP:]
-        except OSError:
-            return
+        budget = 4 * 1024 * 1024
+        chunks: list[list[str]] = []
+        collected = 0
+        for file in reversed(self.files() or [path]):
+            if collected >= KEEP or budget <= 0:
+                break
+            try:
+                with file.open("rb") as handle:
+                    handle.seek(0, 2)
+                    size = handle.tell()
+                    read_bytes = min(size, budget)
+                    handle.seek(size - read_bytes)
+                    raw = handle.read(read_bytes)
+                    budget -= read_bytes
+            except OSError:
+                continue
+            lines = raw.decode("utf-8", "replace").splitlines()
+            if size > read_bytes and lines:
+                lines = lines[1:]  # first line may be truncated mid-line
+            part = lines[-(KEEP - collected) :]
+            chunks.append(part)
+            collected += len(part)
         with self._lock_lines:
-            for text in tail:
-                try:
-                    line = json.loads(text)
-                except ValueError:
-                    continue
-                if isinstance(line, dict) and "message" in line:
-                    line["id"] = self._next
-                    self._next += 1
-                    self._lines.append(line)
+            for part in reversed(chunks):
+                for text in part:
+                    try:
+                        line = json.loads(text)
+                    except ValueError:
+                        continue
+                    if isinstance(line, dict) and "message" in line:
+                        line["id"] = self._next
+                        self._next += 1
+                        self._lines.append(line)
 
     def take_outbox(self) -> list[dict[str, Any]]:
         with self._lock_lines:

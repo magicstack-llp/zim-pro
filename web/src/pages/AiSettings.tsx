@@ -4,6 +4,7 @@ import { Dialog } from "../Dialog";
 import { KIND_NAMES, modelKey, modelOptions, PRESETS, splitModelKey, type ModelGroup, type ProviderInfo } from "../lib/ai";
 import { api, authHeaders, post } from "../lib/api";
 import { useTouch } from "../lib/viewport";
+import { ErrorNote } from "../ui";
 
 export const PICKER = "input flex w-full items-center gap-2.5 text-left";
 const MASK = "••••••••";
@@ -299,10 +300,13 @@ export function Providers({ groups, onChanged }: { groups: ModelGroup[] | null; 
   // undefined: closed. null: adding, at the "pick a service" step. Otherwise: editing.
   const [dialog, setDialog] = useState<Draft | null | undefined>(undefined);
   const [switching, setSwitching] = useState("");
+  const [problem, setProblem] = useState<string | null>(null);
   const toggle = (provider: ProviderInfo) => {
+    setProblem(null);
     setSwitching(provider.id);
     api(`/api/ai/providers/${provider.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !provider.enabled }) })
       .then(onChanged)
+      .catch((reason) => setProblem(String((reason as Error).message)))
       .finally(() => setSwitching(""));
   };
   const edit = (provider: ProviderInfo) =>
@@ -325,6 +329,7 @@ export function Providers({ groups, onChanged }: { groups: ModelGroup[] | null; 
         )}
       </div>
 
+      <ErrorNote message={problem} />
       {groups && groups.length === 0 && (
         <div className="border-t border-zinc-100 py-8 text-center dark:border-zinc-800">
           <p className="font-medium">No provider yet</p>

@@ -14,9 +14,12 @@ broker keeps the order of the jobs waiting to start, and whether a queue is paus
 
 import logging
 import time
+from collections import deque
 from typing import Any
 
 import redis
+from redis.backoff import NoBackoff
+from redis.retry import Retry
 
 from .db import Database
 
@@ -26,6 +29,7 @@ PREFIX = "zimpro"
 LOG_STREAM = f"{PREFIX}:logs"
 LOG_STREAM_KEEP = 20000
 RETRY_SECONDS = 15  # after a failure, Redis is left alone this long
+INFO_TTL = 5.0  # seconds a successful Redis info() probe is cached
 
 
 class LocalBroker:
@@ -73,10 +77,14 @@ class RedisBroker(LocalBroker):
             socket_timeout=2,
             socket_connect_timeout=2,
             health_check_interval=30,
+            retry=Retry(NoBackoff(), 0),
         )
         self.error = ""
         self._down_until = 0.0
         self.calls = self.failures = 0
+        self._pending_logs: deque[dict[str, Any]] = deque(maxlen=LOG_STREAM_KEEP)
+        self._info_cache: dict[str, Any] | None = None
+        self._info_at = 0.0
 
     # -- reaching Redis ----------------------------------------------------------------
 
@@ -85,6 +93,7 @@ class RedisBroker(LocalBroker):
 
     def _failed(self, exc: Exception) -> None:
         self.failures += 1
+        self._info_cache = None
         if not self.error:
             log.warning(
                 "Redis at %s cannot be reached (%s); the queues use the database until it is back",
@@ -111,16 +120,21 @@ class RedisBroker(LocalBroker):
             return super().waiting(queue, jobs)
         key = self.key(queue)
         try:
-            held = {
-                int(member): score
-                for member, score in self.client.zrange(key, 0, -1, withscores=True)
-            }
+            held: dict[int, float] = {}
+            bad: list[str] = []
+            for member, score in self.client.zrange(key, 0, -1, withscores=True):
+                try:
+                    held[int(member)] = score
+                except (ValueError, TypeError):
+                    bad.append(str(member))
+            if bad:
+                log.warning("Removing non-numeric members from %s: %s", key, bad[:5])
             wanted = {job_id for job_id, _ in jobs}
             pipe = self.client.pipeline()
             missing = {str(job_id): score for job_id, score in jobs if job_id not in held}
             if missing:
                 pipe.zadd(key, missing, nx=True)
-            extra = [str(job_id) for job_id in held if job_id not in wanted]
+            extra = [*(str(job_id) for job_id in held if job_id not in wanted), *bad]
             if extra:
                 pipe.zrem(key, *extra)
             if missing or extra:
@@ -171,16 +185,19 @@ class RedisBroker(LocalBroker):
                 self._failed(exc)
 
     def send_logs(self, lines: list[dict[str, Any]]) -> None:
-        if not lines or not self._usable():
+        if lines:
+            self._pending_logs.extend(lines)
+        if not self._pending_logs or not self._usable():
             return
         try:
             pipe = self.client.pipeline(transaction=False)
-            for line in lines:
+            for line in self._pending_logs:
                 fields = {k: str(v) for k, v in line.items() if k != "id"}
                 pipe.xadd(LOG_STREAM, fields, maxlen=LOG_STREAM_KEEP, approximate=True)
             pipe.execute()
+            self._pending_logs.clear()
             self._worked()
-        except redis.RedisError as exc:
+        except Exception as exc:
             self._failed(exc)
 
     def info(self) -> dict[str, Any]:
@@ -192,6 +209,11 @@ class RedisBroker(LocalBroker):
             "calls": self.calls,
             "failures": self.failures,
         }
+        if not self._usable():
+            return out
+        now = time.monotonic()
+        if self._info_cache is not None and now - self._info_at < INFO_TTL:
+            return {**self._info_cache, "calls": self.calls, "failures": self.failures}
         try:
             started = time.perf_counter()
             self.client.ping()
@@ -213,9 +235,13 @@ class RedisBroker(LocalBroker):
                 log_lines=self.client.xlen(LOG_STREAM),
             )
             self._worked()
+            out["calls"] = self.calls
+            self._info_cache = dict(out)
+            self._info_at = now
         except redis.RedisError as exc:
             self._failed(exc)
             out["error"] = self.error
+            out["failures"] = self.failures
         return out
 
     def close(self) -> None:

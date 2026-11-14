@@ -4,9 +4,11 @@ A key is shown once, when it is made. Only its SHA-256 is kept, so the database,
 it, or anyone reading it cannot give the key back; a lost key is replaced, not recovered.
 """
 
+import contextlib
 import hashlib
 import hmac
 import secrets
+import sqlite3
 import time
 from typing import Any
 
@@ -40,6 +42,8 @@ def create_key(db: Database, name: str) -> tuple[dict[str, Any], str]:
         "SELECT id, name, hint, created, last_used FROM mcp_keys WHERE id = ?",
         (cursor.lastrowid,),
     )
+    if row is None:
+        raise RuntimeError("created MCP key could not be read back")
     return row, key
 
 
@@ -51,13 +55,15 @@ def check_key(db: Database, key: str) -> bool:
     """Whether ``key`` is one of the keys made here; notes that it was used."""
     if not key.startswith(PREFIX):
         return False
-    digest = _digest(key)
+    digest = _digest(key).encode("ascii")
     for row in db.all("SELECT id, digest, last_used FROM mcp_keys"):
-        if hmac.compare_digest(row["digest"], digest):
+        stored = str(row["digest"]).encode("utf-8", "replace")
+        if hmac.compare_digest(stored, digest):
             if time.time() - (row["last_used"] or 0) > SEEN_EVERY:
-                db.execute(
-                    "UPDATE mcp_keys SET last_used = unixepoch('subsec') WHERE id = ?",
-                    (row["id"],),
-                )
+                with contextlib.suppress(sqlite3.Error):
+                    db.execute(
+                        "UPDATE mcp_keys SET last_used = unixepoch('subsec') WHERE id = ?",
+                        (row["id"],),
+                    )
             return True
     return False

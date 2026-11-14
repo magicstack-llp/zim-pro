@@ -13,6 +13,7 @@ import json
 import os
 import re
 import shutil
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -233,7 +234,12 @@ def _png(image: Image.Image) -> bytes:
 
 
 def write_zim(
-    stage: Stage, meta: ZimMeta, target: Path, workers: int = 4, on_progress=None
+    stage: Stage,
+    meta: ZimMeta,
+    target: Path,
+    workers: int = 4,
+    on_progress=None,
+    check: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     """Write the staged content to ``target`` and check that nothing went missing.
 
@@ -264,6 +270,8 @@ def write_zim(
             creator.set_mainpath(main)
             total = len(stage.entries)
             for number, entry in enumerate(stage.entries.values(), 1):
+                if check and number % 25 == 1:
+                    check()
                 digest = ""
                 if entry.text_file is None and entry.file.stat().st_size < 64 * 1024 * 1024:
                     digest = hashlib.sha1(entry.file.read_bytes()).hexdigest() + entry.mimetype
@@ -298,14 +306,19 @@ def write_zim(
             for key, value in fields.items():
                 if value:
                     creator.add_metadata(key, value)
+        if check:
+            check()
         report = verify(temporary, stage, main)
+        if check:
+            check()
     except BuildError:
         temporary.unlink(missing_ok=True)
         raise
     except Exception as exc:
         temporary.unlink(missing_ok=True)
+        if type(exc).__name__ == "Cancelled":
+            raise
         raise BuildError(f"The ZIM could not be written: {exc}") from exc
-    target.unlink(missing_ok=True)
     temporary.replace(target)
     report.update(size=target.stat().st_size, deduplicated=aliased)
     return report

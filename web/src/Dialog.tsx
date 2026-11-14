@@ -26,17 +26,56 @@ export function Dialog({
   children: ReactNode;
 }) {
   useScrollLock(true);
+  const panel = useRef<HTMLDivElement>(null);
   // Escape closes only the dialog on top, when one was opened from another.
   const close = useRef(onClose);
   close.current = onClose;
   useEffect(() => {
     const mine = {};
+    const previous = document.activeElement as HTMLElement | null;
     open.push(mine);
-    const onKey = (event: KeyboardEvent) => event.key === "Escape" && open[open.length - 1] === mine && close.current();
+
+    const focusables = () =>
+      Array.from(
+        panel.current?.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+        ) ?? [],
+      ).filter((el) => el.offsetParent !== null || el === document.activeElement);
+
+    if (panel.current && !panel.current.contains(document.activeElement)) {
+      const initial = panel.current.querySelector<HTMLElement>("input:not([disabled]), select:not([disabled]), textarea:not([disabled])") ?? focusables()[0] ?? panel.current;
+      initial.focus();
+    }
+
+    const onKey = (event: KeyboardEvent) => {
+      if (open[open.length - 1] !== mine) return;
+      if (event.key === "Escape") {
+        close.current();
+        return;
+      }
+      if (event.key === "Tab") {
+        const items = focusables();
+        if (!items.length) {
+          event.preventDefault();
+          panel.current?.focus();
+          return;
+        }
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (event.shiftKey && (document.activeElement === first || !panel.current?.contains(document.activeElement))) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && (document.activeElement === last || !panel.current?.contains(document.activeElement))) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+    };
     document.addEventListener("keydown", onKey);
     return () => {
       document.removeEventListener("keydown", onKey);
       open.splice(open.indexOf(mine), 1);
+      previous?.focus?.();
     };
   }, []);
 
@@ -44,10 +83,12 @@ export function Dialog({
     <div className="fixed inset-x-0 z-[60] flex items-end justify-center sm:items-center sm:p-6" style={{ top: "var(--vv-top, 0px)", height: "var(--vvh, 100dvh)" }}>
       <button className="absolute inset-0 hidden cursor-default bg-black/45 sm:block" aria-label="Close" tabIndex={-1} onClick={onClose} />
       <div
+        ref={panel}
+        tabIndex={-1}
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className="relative flex h-full w-full flex-col bg-white shadow-2xl sm:h-auto sm:max-h-full sm:max-w-lg sm:rounded-3xl dark:bg-zinc-900"
+        className="relative flex h-full w-full flex-col bg-white shadow-2xl outline-none sm:h-auto sm:max-h-full sm:max-w-lg sm:rounded-3xl dark:bg-zinc-900"
       >
         <header className="flex shrink-0 items-center gap-1 border-b border-zinc-200 py-2 pr-2 pl-2 sm:pl-3 dark:border-zinc-800">
           {onBack && (

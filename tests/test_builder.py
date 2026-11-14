@@ -205,15 +205,6 @@ class Site:
         )
 
 
-@pytest.fixture
-def no_waiting(monkeypatch):
-    real_sleep = asyncio.sleep
-    monkeypatch.setattr(asyncio, "sleep", lambda _seconds: real_sleep(0))
-    monkeypatch.setattr("zim_pro.builder.crawler.HOST_DELAY", 0)
-    monkeypatch.setattr("zim_pro.builder.crawler.SLOW_DELAY_MIN", 0)
-    monkeypatch.setattr("zim_pro.builder.crawler.RATE_WAIT", 0)
-
-
 async def crawl(tmp_path, site, url="https://site.test/guide/", **options):
     stage, report = Stage(tmp_path / f"stage-{len(list(tmp_path.glob('stage-*')))}"), Reporter()
     crawler = Crawler(
@@ -446,14 +437,31 @@ async def test_paused_crawl_waits_and_carries_on_when_resumed(tmp_path, no_waiti
 def test_paused_work_on_a_thread_waits_and_can_still_be_cancelled():
     report = Reporter()
     report.paused.set()
-    threading.Timer(0.05, report.paused.clear).start()
-    started = time.monotonic()
-    report.check()
-    assert time.monotonic() - started >= 0.04
+    t1 = threading.Thread(target=report.check)
+    t1.start()
+    t1.join(0.05)
+    assert t1.is_alive()  # still blocked in check() while paused
+    report.paused.clear()
+    t1.join(timeout=2.0)
+    assert not t1.is_alive()
+
+    cancelled: list[BaseException] = []
+
+    def run_check():
+        try:
+            report.check()
+        except Cancelled as exc:
+            cancelled.append(exc)
+
     report.paused.set()
-    threading.Timer(0.05, report.cancelled.set).start()
-    with pytest.raises(Cancelled):
-        report.check()
+    t2 = threading.Thread(target=run_check)
+    t2.start()
+    t2.join(0.05)
+    assert t2.is_alive()
+    report.cancelled.set()
+    t2.join(timeout=2.0)
+    assert not t2.is_alive()
+    assert len(cancelled) == 1
 
 
 def test_cancelled_build_stops_at_the_next_step():
@@ -795,3 +803,563 @@ async def test_a_new_zim_is_filed_under_its_category_and_carries_the_chosen_pict
         assert shown.convert("RGB").getpixel((2, 2)) == (200, 30, 30)
     finally:
         await builds.stop()
+
+
+# -- r1 review regression tests -------------------------------------------------------
+
+
+async def test_concurrent_builds_with_same_title_get_distinct_book_ids(tmp_path):
+    builds = manager(tmp_path)
+    builds.db.execute("UPDATE settings SET value = '2' WHERE key = 'max_concurrent_builds'")
+    for idx in (1, 2):
+        path = tmp_path / f"guide-{idx}.epub"
+        make_epub(path)
+        builds.db.execute(
+            "INSERT INTO uploads (id, filename, kind, size, path, title) "
+            "VALUES (?, ?, 'epub', 1, ?, 'Guide')",
+            (idx, f"guide-{idx}.epub", str(path)),
+        )
+    await builds.start()
+    try:
+        j1 = builds.enqueue("upload", 1, "Guide")
+        j2 = builds.enqueue("upload", 2, "Guide")
+        r1, r2 = await asyncio.gather(finished(builds, j1["id"]), finished(builds, j2["id"]))
+        assert r1["book_id"] != r2["book_id"]
+        assert len(list((tmp_path / "data").glob("*.zim"))) == 2
+    finally:
+        await builds.stop()
+
+
+async def test_cancel_during_slow_write_does_not_install_zim_or_clear_stage_early(
+    tmp_path, monkeypatch
+):
+    import threading
+
+    from zim_pro.builder import jobs as jobs_mod
+    from zim_pro.builder import writer as writer_mod
+
+    builds = manager(tmp_path)
+    source = tmp_path / "book.epub"
+    make_epub(source)
+    builds.db.execute(
+        "INSERT INTO uploads (id, filename, kind, size, path) "
+        "VALUES (1, 'book.epub', 'epub', 1, ?)",
+        (str(source),),
+    )
+    entered = threading.Event()
+    release = threading.Event()
+    stage_existed_at_exit = False
+
+    def slow_write(stage, meta, target, workers=4, on_progress=None, check=None):
+        entered.set()
+        release.wait(timeout=3)
+        nonlocal stage_existed_at_exit
+        stage_existed_at_exit = stage.folder.exists()
+        return writer_mod.write_zim(stage, meta, target, workers, on_progress, check)
+
+    monkeypatch.setattr(jobs_mod, "write_zim", slow_write)
+    await builds.start()
+    try:
+        job = builds.enqueue("upload", 1, "book.epub")
+        assert await asyncio.to_thread(entered.wait, 3)
+        builds.cancel(job["id"])
+        release.set()
+        done = await finished(builds, job["id"])
+        assert done["state"] == "cancelled"
+        assert stage_existed_at_exit
+        assert list((tmp_path / "data").glob("*.zim")) == []
+    finally:
+        await builds.stop()
+
+
+async def test_cancel_mid_crawl_records_zero_failed_pages(tmp_path):
+    site = Site()
+    site.pages = {
+        "/": (
+            "text/html",
+            b"<html><body><main><h1>Home</h1>"
+            + b"".join(f'<a href="/p{i}">p{i}</a>'.encode() for i in range(1, 20))
+            + b"</main></body></html>",
+        ),
+        **{
+            f"/p{i}": (
+                "text/html",
+                f"<html><body><main><h1>P{i}</h1><p>Body {i}</p></main></body></html>".encode(),
+            )
+            for i in range(1, 20)
+        },
+    }
+    report = Reporter()
+    calls = 0
+
+    def handler(request):
+        nonlocal calls
+        calls += 1
+        if calls >= 4:
+            report.cancelled.set()
+        return site(request)
+
+    crawler = Crawler(
+        CrawlOptions("https://site.test/", scope="site", max_pages=20, sitemaps=False),
+        Stage(tmp_path / "stage"),
+        tmp_path / "cache",
+        report,
+        workers=1,
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(Cancelled):
+        await crawler.run()
+    assert report.failed_count == 0
+
+
+def test_html_injection_is_escaped_in_extract_and_epub(tmp_path):
+    malicious = (
+        '<html><body><main>'
+        '<img src="https://example.org/a.png" alt="<img src=x onerror=alert(1)>">'
+        "<video src='https://example.org/v\" onmouseover=\"alert(1)'></video>"
+        "</main></body></html>"
+    )
+    prepared = extract.prepare(malicious, "https://example.org/", images=False, video=False)
+    assert "<img" not in prepared.html
+    assert 'onmouseover="alert' not in prepared.html
+    assert "lt;img src=x" in prepared.html
+
+    localised = extract.localise(
+        '<video src="https://example.org/v&quot; onmouseover=&quot;alert(1)"></video>',
+        "example.org/index",
+        {},
+    )
+    anchor = extract.HTMLParser(localised).css_first("a")
+    assert anchor is not None and "onmouseover" not in anchor.attributes
+
+    epub_path = tmp_path / "evil.epub"
+    with zipfile.ZipFile(epub_path, "w") as zf:
+        zf.writestr(
+            "META-INF/container.xml",
+            '<?xml version="1.0"?><container version="1.0" '
+            'xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+            'media-type="application/oebps-package+xml"/></rootfiles></container>',
+        )
+        zf.writestr(
+            "OEBPS/content.opf",
+            '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0">'
+            '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/">'
+            "<dc:title>T</dc:title></metadata>"
+            '<manifest><item id="c1" href="c1.xhtml" '
+            'media-type="application/xhtml+xml"/></manifest>'
+            '<spine><itemref idref="c1"/></spine></package>',
+        )
+        zf.writestr(
+            "OEBPS/c1.xhtml",
+            '<html><body><p>Hello</p>'
+            '<img src="a.png" alt="<script>alert(1)</script>"/></body></html>',
+        )
+    stage = Stage(tmp_path / "stage")
+    epub.convert(epub_path, stage, Reporter(), "evil.epub", images=False)
+    html_out = stage.page_html("book/OEBPS/c1.xhtml")
+    assert "<script>" not in html_out
+
+
+async def test_resources_respect_robots_and_reject_private_addresses(tmp_path):
+    site = Site()
+    site.pages = {
+        "/robots.txt": ("text/plain", b"User-agent: *\nDisallow: /img/"),
+        "/": (
+            "text/html",
+            b'<html><body><main><h1>Hi</h1>'
+            b'<img src="/img/blocked.png" alt="B">'
+            b'<img src="http://127.0.0.1:8080/secret.png" alt="S">'
+            b"</main></body></html>",
+        ),
+        "/img/blocked.png": ("image/png", PNG),
+    }
+    report = Reporter()
+    stage = Stage(tmp_path / "stage")
+    crawler = Crawler(
+        CrawlOptions("https://site.test/", sitemaps=False),
+        stage,
+        tmp_path / "cache",
+        report,
+        transport=httpx.MockTransport(site),
+    )
+    await crawler.run()
+    assert "/img/blocked.png" not in site.asked
+    assert not any("127.0.0.1" in p for p in stage.entries)
+    assert report.skipped_count >= 2
+
+
+async def test_feed_articles_checked_against_robots_and_prioritised_over_sitemap(tmp_path):
+    feed_xml = (
+        b'<?xml version="1.0"?><rss version="2.0"><channel><title>F</title>'
+        b"<item><title>News</title><link>https://site.test/news/1</link></item>"
+        b"<item><title>Hidden</title><link>https://blog.site.test/secret/2</link></item>"
+        b"</channel></rss>"
+    )
+    sitemap_xml = (
+        b'<?xml version="1.0"?><urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
+        b"<url><loc>https://site.test/s1</loc></url>"
+        b"<url><loc>https://site.test/s2</loc></url>"
+        b"<url><loc>https://site.test/s3</loc></url>"
+        b"</urlset>"
+    )
+    hosts = {
+        ("site.test", "/robots.txt"): ("text/plain", b"User-agent: *\nDisallow:"),
+        ("site.test", "/"): ("text/html", b"<html><body><main><h1>Home</h1></main></body></html>"),
+        ("site.test", "/feed.xml"): ("application/rss+xml", feed_xml),
+        ("site.test", "/sitemap.xml"): ("application/xml", sitemap_xml),
+        ("site.test", "/news/1"): (
+            "text/html",
+            b"<html><body><main><h1>News</h1></main></body></html>",
+        ),
+        ("site.test", "/s1"): ("text/html", b"<html><body><main><h1>S1</h1></main></body></html>"),
+        ("site.test", "/s2"): ("text/html", b"<html><body><main><h1>S2</h1></main></body></html>"),
+        ("site.test", "/s3"): ("text/html", b"<html><body><main><h1>S3</h1></main></body></html>"),
+        ("blog.site.test", "/robots.txt"): ("text/plain", b"User-agent: *\nDisallow: /secret/"),
+        ("blog.site.test", "/secret/2"): (
+            "text/html",
+            b"<html><body><main><h1>Secret</h1></main></body></html>",
+        ),
+    }
+    requested: list[tuple[str, str]] = []
+
+    def handler(request):
+        requested.append((request.url.host, request.url.path))
+        if (request.url.host, request.url.path) in hosts:
+            ctype, body = hosts[(request.url.host, request.url.path)]
+            return httpx.Response(200, headers={"content-type": ctype}, content=body)
+        return httpx.Response(404)
+
+    stage = Stage(tmp_path / "stage")
+    crawler = Crawler(
+        CrawlOptions(
+            "https://site.test/",
+            scope="site",
+            subdomains=True,
+            max_pages=2,
+            feed_urls=("https://site.test/feed.xml",),
+        ),
+        stage,
+        tmp_path / "cache",
+        Reporter(),
+        workers=1,
+        transport=httpx.MockTransport(handler),
+    )
+    await crawler.run()
+    assert stage.has("site.test/news/1")
+    assert ("blog.site.test", "/secret/2") not in requested
+
+
+@pytest.mark.parametrize(
+    ("data", "header", "expected"),
+    [
+        (b"caf\xe9", "text/html; charset=iso-8859-1", "café"),
+        (b" " * 5000 + b'<meta charset="windows-1252">caf\xe9', "", "café"),
+        (b"\xff\xfe" + "hello".encode("utf-16-le"), "", "hello"),
+        (b"\x93smart\x94", "", "“smart”"),
+        (b"\x81", "", "\ufffd"),
+    ],
+)
+def test_decode_charsets_and_fallbacks(data, header, expected):
+    from zim_pro.builder.crawler import _decode
+
+    assert expected in _decode(data, header)
+
+
+async def test_challenged_caps_403_body_read(tmp_path):
+    from zim_pro.builder.crawler import Fetcher, FetchError
+
+    class _Stream(httpx.AsyncByteStream):
+        def __init__(self, gen):
+            self._gen = gen
+
+        async def __aiter__(self):
+            async for chunk in self._gen():
+                yield chunk
+
+    class Huge403(httpx.AsyncBaseTransport):
+        def __init__(self):
+            self.bytes_yielded = 0
+
+        async def handle_async_request(self, request):
+            async def stream():
+                for _ in range(20):
+                    self.bytes_yielded += 16_384
+                    yield b"x" * 16_384
+
+            return httpx.Response(
+                403,
+                headers={"content-type": "text/html"},
+                stream=_Stream(stream),
+            )
+
+    transport = Huge403()
+    fetcher = Fetcher(tmp_path / "cache", workers=1, transport=transport)
+    try:
+        with pytest.raises(FetchError, match="HTTP 403"):
+            await fetcher.get("https://site.test/page", limit=1024 * 1024)
+        assert transport.bytes_yielded <= 65_536
+    finally:
+        await fetcher.close()
+
+
+async def test_fetcher_close_ignores_readonly_state_dir(tmp_path):
+    from zim_pro.builder.crawler import Fetcher
+
+    cache = tmp_path / "cache"
+    fetcher = Fetcher(cache, workers=1, transport=httpx.MockTransport(Site()))
+    fetcher._index["https://site.test/"] = {"url": "https://site.test/", "type": "text/html"}
+    cache.chmod(0o555)
+    try:
+        await fetcher.close()
+    finally:
+        cache.chmod(0o755)
+
+
+async def test_disk_preflight_accounts_for_stage_plus_output(tmp_path, monkeypatch):
+    from zim_pro.builder import jobs as jobs_mod
+
+    builds = manager(tmp_path)
+    stage = staged(tmp_path)
+    meta = ZimMeta("custom_space", "Space")
+    stage_size = stage.size
+    fake_free = stage_size + jobs_mod.FREE_SPACE_MARGIN
+    monkeypatch.setattr(
+        jobs_mod.shutil,
+        "disk_usage",
+        lambda _p: type("Usage", (), {"free": fake_free})(),
+    )
+    with pytest.raises(BuildError, match="Not enough disk space"):
+        await builds._write(stage, meta, Reporter())
+
+
+async def test_zim_upload_can_be_retried_without_losing_file(tmp_path):
+    builds = manager(tmp_path)
+    stage = staged(tmp_path)
+    zim_src = tmp_path / "sample.zim"
+    write_zim(stage, ZimMeta("custom_sample", "Sample"), zim_src)
+    builds.db.execute(
+        "INSERT INTO uploads (id, filename, kind, size, path) "
+        "VALUES (1, 'sample.zim', 'zim', 1, ?)",
+        (str(zim_src),),
+    )
+    await builds.start()
+    try:
+        job = await finished(builds, builds.enqueue("upload", 1, "sample.zim")["id"])
+        assert job["state"] == "finished"
+        assert zim_src.is_file()
+        builds.retry(job["id"])
+        retried = await finished(builds, job["id"])
+        assert retried["state"] == "finished"
+    finally:
+        await builds.stop()
+
+
+def test_delete_link_cancels_active_build(tmp_path):
+    from zim_pro.api.build import delete_link
+    from zim_pro.config import Config
+
+    builds = manager(tmp_path)
+    builds.db.execute("INSERT INTO links (id, url, title) VALUES (1, 'https://example.org/', 'Ex')")
+    job = builds.enqueue("link", 1, "Ex")
+    ctx = type(
+        "Ctx",
+        (),
+        {
+            "db": builds.db,
+            "builds": builds,
+            "events": builds.events,
+            "config": Config(tmp_path / "data", tmp_path / "state"),
+        },
+    )()
+    delete_link(1, ctx)  # type: ignore[arg-type]
+    assert builds.get(job["id"])["state"] == "cancelled"
+
+
+async def test_concurrent_enqueue_allows_only_one(tmp_path):
+    builds = manager(tmp_path)
+
+    async def try_one():
+        return await asyncio.to_thread(builds.enqueue, "link", 1, "Same")
+
+    results = await asyncio.gather(try_one(), try_one(), return_exceptions=True)
+    ok = [r for r in results if isinstance(r, dict)]
+    errs = [r for r in results if isinstance(r, BuildError)]
+    assert len(ok) == 1 and len(errs) == 1
+
+
+def test_hostile_unclosed_sitemap_returns_quickly():
+    import time
+
+    from zim_pro.builder import sitemap
+
+    hostile = b"<urlset>" + b"<loc>https://evil.test/" * 20_000
+    started = time.monotonic()
+    more, pages = sitemap.parse(hostile)
+    assert time.monotonic() - started < 1.0
+    assert more == [] and pages == []
+
+
+async def test_pause_holds_resource_fetching(tmp_path):
+    slow_calls = 0
+    site = Site()
+    site.pages = {
+        "/": (
+            "text/html",
+            b'<html><body><main><h1>Hi</h1>'
+            b'<img src="/img/a.png" alt="A"><img src="/img/b.png" alt="B">'
+            b"</main></body></html>",
+        ),
+        "/img/a.png": ("image/png", PNG),
+        "/img/b.png": ("image/png", PNG),
+    }
+
+    def handler(request):
+        nonlocal slow_calls
+        if request.url.path.startswith("/img/"):
+            slow_calls += 1
+        return site(request)
+
+    report = Reporter()
+    report.paused.set()
+    crawler = Crawler(
+        CrawlOptions("https://site.test/", sitemaps=False),
+        Stage(tmp_path / "stage"),
+        tmp_path / "cache",
+        report,
+        transport=httpx.MockTransport(handler),
+    )
+    crawler.resources["https://site.test/img/a.png"] = "image"
+    task = asyncio.create_task(crawler._resources())
+    await asyncio.sleep(0.05)
+    assert slow_calls == 0
+    report.paused.clear()
+    await task
+    assert slow_calls == 1
+
+
+async def test_max_total_mb_stops_saving_pages(tmp_path):
+    big = b"<html><body><main><h1>Big</h1><p>" + b"a" * (300 * 1024) + b"</p></main></body></html>"
+    site = Site()
+    site.pages = {
+        "/": (
+            "text/html",
+            b'<html><body><main><a href="/p1">1</a><a href="/p2">2</a></main></body></html>',
+        ),
+        "/p1": ("text/html", big),
+        "/p2": ("text/html", big),
+    }
+    stage = Stage(tmp_path / "stage")
+    report = Reporter()
+    crawler = Crawler(
+        CrawlOptions(
+            "https://site.test/", scope="site", max_pages=10, max_total_mb=1, sitemaps=False
+        ),
+        stage,
+        tmp_path / "cache",
+        report,
+        workers=1,
+        transport=httpx.MockTransport(site),
+    )
+    await crawler.run()
+    assert len(stage.pages) == 2  # seed + p1; p2 exceeds 1 MB
+    assert report.skipped_count >= 1
+
+
+def test_normalise_sorts_query_and_resolves_dot_segments():
+    assert extract.normalise("https://example.org/a/../b?b=2&a=1") == "https://example.org/b?a=1&b=2"
+
+
+def test_epub_rejects_dotdot_href(tmp_path):
+    epub_path = tmp_path / "dotdot.epub"
+    with zipfile.ZipFile(epub_path, "w") as zf:
+        zf.writestr(
+            "META-INF/container.xml",
+            '<?xml version="1.0"?><container version="1.0" '
+            'xmlns="urn:oasis:names:tc:opendocument:xmlns:container">'
+            '<rootfiles><rootfile full-path="OEBPS/content.opf" '
+            'media-type="application/oebps-package+xml"/></rootfiles></container>',
+        )
+        zf.writestr(
+            "OEBPS/content.opf",
+            '<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="2.0">'
+            '<metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>T</dc:title></metadata>'
+            '<manifest>'
+            '<item id="bad" href="../../evil.xhtml" media-type="application/xhtml+xml"/>'
+            '<item id="ok" href="ok.xhtml" media-type="application/xhtml+xml"/>'
+            '</manifest>'
+            '<spine><itemref idref="bad"/><itemref idref="ok"/></spine></package>',
+        )
+        zf.writestr("OEBPS/ok.xhtml", "<html><body><p>Good chapter</p></body></html>")
+    stage = Stage(tmp_path / "stage")
+    report = Reporter()
+    epub.convert(epub_path, stage, report, "dotdot.epub")
+    assert report.failed_count == 1
+    assert not any(".." in p for p in stage.entries)
+
+
+def test_reporter_keeps_failures_after_many_skips_and_jobs_handles_corrupt_json(tmp_path):
+    report = Reporter()
+    for i in range(600):
+        report.skipped(f"https://example.org/{i}", "over limit")
+    report.failed("https://example.org/err", "HTTP 500")
+    assert any(e["kind"] == "failed" for e in report.log)
+
+    builds = manager(tmp_path)
+    builds.db.execute(
+        "INSERT INTO builds (kind, source_id, title, state, log, report, params) "
+        "VALUES ('link', 1, 'X', 'failed', '{bad', '{bad', '{bad')"
+    )
+    row = builds.get(1)
+    assert row is not None and row["log"] == [] and row["report"] == {}
+    builds.retry(1)
+    retried = builds.get(1)
+    assert retried["size"] == 0 and retried["book_id"] == ""
+
+
+async def test_zimit_checks_start_and_cleans_up_on_error(tmp_path, monkeypatch):
+    from zim_pro.builder import zimit
+
+    seen_names: list[str] = []
+    deleted = False
+
+    class FakeDocker(httpx.AsyncBaseTransport):
+        async def handle_async_request(self, request):
+            nonlocal deleted
+            path = request.url.path
+            if path == "/images/create":
+                return httpx.Response(200, content=b'{"status":"ok"}\n')
+            if path.endswith("/json"):
+                return httpx.Response(404)
+            if path == "/containers/create":
+                seen_names.append(request.url.params.get("name", ""))
+                return httpx.Response(201, json={"Id": "cid1"})
+            if path == "/containers/cid1/start":
+                return httpx.Response(500, text="daemon error")
+            if request.method == "DELETE" and path == "/containers/cid1":
+                deleted = True
+                return httpx.Response(204)
+            return httpx.Response(404)
+
+    monkeypatch.setattr(zimit, "unavailable", lambda: "")
+    monkeypatch.setattr(
+        zimit,
+        "_client",
+        lambda: httpx.AsyncClient(transport=FakeDocker(), base_url="http://docker"),
+    )
+    with pytest.raises(BuildError, match="daemon error"):
+        await zimit.capture(
+            {
+                "title": "Site",
+                "url": "https://site.test/",
+                "scope": "page",
+                "subdomains": 0,
+                "language": "en",
+                "max_pages": 1,
+                "max_depth": 0,
+            },
+            tmp_path / "out",
+            Reporter(),
+            "custom_site",
+        )
+    assert deleted and len(seen_names[0].split("-")) >= 5

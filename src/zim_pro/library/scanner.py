@@ -8,7 +8,7 @@ from libzim.reader import Archive
 
 from ..db import Database
 from .archive_pool import ArchivePool
-from .naming import category_of, split_filename
+from .naming import category_of, filename_revision, split_filename
 
 log = logging.getLogger(__name__)
 
@@ -96,6 +96,90 @@ def file_under_categories(db: Database) -> None:
             db.execute("UPDATE books SET category = ? WHERE id = ?", (category, row["id"]))
 
 
+def _iter_zim_paths(data_dir: Path) -> tuple[list[Path], bool]:
+    """Walk ``data_dir`` following directory symlinks, guarding against loops and I/O errors."""
+    if not data_dir.is_dir():
+        return [], True
+    had_error = False
+    visited: set[tuple[int, int]] = set()
+    try:
+        root_stat = data_dir.stat()
+        visited.add((root_stat.st_dev, root_stat.st_ino))
+    except OSError:
+        return [], True
+
+    def _on_error(exc: OSError) -> None:
+        nonlocal had_error
+        had_error = True
+        log.warning("scan walk error: %s", exc)
+
+    paths: list[Path] = []
+    for dirpath, dirnames, filenames in os.walk(data_dir, followlinks=True, onerror=_on_error):
+        kept_dirs: list[str] = []
+        for d in sorted(dirnames):
+            if d.startswith("."):
+                continue
+            full_dir = os.path.join(dirpath, d)
+            try:
+                st = os.stat(full_dir)
+            except OSError as exc:
+                had_error = True
+                log.warning("cannot stat directory %s: %s", full_dir, exc)
+                continue
+            key = (st.st_dev, st.st_ino)
+            if key in visited:
+                continue
+            visited.add(key)
+            kept_dirs.append(d)
+        dirnames[:] = kept_dirs
+
+        for name in sorted(filenames):
+            if name.startswith(".") or not name.endswith(".zim"):
+                continue
+            paths.append(Path(dirpath) / name)
+    paths.sort()
+    return paths, had_error
+
+
+def _split_distinct_books(
+    groups: dict[str, list[dict[str, Any]]],
+) -> dict[str, list[dict[str, Any]]]:
+    """Separate files that share a filename stem but have different (name, flavour) metadata."""
+    result: dict[str, list[dict[str, Any]]] = {}
+    for stem, rows in groups.items():
+        identities = {
+            (r["name"], r.get("flavour", ""))
+            for r in rows
+            if "name" in r and r.get("error") is None
+        }
+        if len(identities) <= 1:
+            result[stem] = rows
+            continue
+        by_ident: dict[tuple[str, str], list[dict[str, Any]]] = {}
+        unknown: list[dict[str, Any]] = []
+        for r in rows:
+            if "name" in r and r.get("error") is None:
+                by_ident.setdefault((r["name"], r.get("flavour", "")), []).append(r)
+            else:
+                unknown.append(r)
+        # Keep the group with the matching stem (or largest/first) under `stem`.
+        ordered = sorted(by_ident.items(), key=lambda kv: (kv[0][0] != stem, kv[0]))
+        for idx, ((name, flavour), subrows) in enumerate(ordered):
+            if idx == 0:
+                book_id = stem
+                subrows.extend(unknown)
+            else:
+                fallback = flavour or subrows[0].get("uuid", "")[:8] or str(idx)
+                suffix = name if name and name != stem else fallback
+                book_id = f"{stem}_{suffix}"
+                while book_id in result:
+                    book_id = f"{book_id}_{idx}"
+            for r in subrows:
+                r["id"] = book_id
+            result[book_id] = subrows
+    return result
+
+
 class Scanner:
     """Keeps the ``books`` table in step with the ZIM files on disk."""
 
@@ -110,86 +194,159 @@ class Scanner:
             return self._scan()
 
     def _scan(self) -> dict[str, int]:
-        known = {r["path"]: r for r in self.db.all("SELECT * FROM books")}
+        known_rows = self.db.all("SELECT * FROM books")
+        known = {r["path"]: r for r in known_rows}
+        known_ids = {r["id"] for r in known_rows}
         shadowed = {r["path"]: r for r in self.db.all("SELECT * FROM shadowed")}
         default_policy = self.db.get_setting("default_policy")
 
         # Group files by stem; the newest release of each book is the one served.
         groups: dict[str, list[dict[str, Any]]] = {}
         read = 0
-        for path in sorted(self.data_dir.rglob("*.zim")):
-            if not path.is_file():
-                continue
-            if any(part.startswith(".") for part in path.relative_to(self.data_dir).parts):
-                continue  # a hidden folder: work in progress, not part of the library
+        paths, had_walk_error = _iter_zim_paths(self.data_dir)
+        to_invalidate: list[str] = []
+
+        for path in paths:
             try:
                 stat = path.stat()
+                if not path.is_file():
+                    continue
             except OSError:
+                if (existing := known.get(str(path))) is not None:
+                    groups.setdefault(existing["id"], []).append(existing)
                 continue
             row = known.get(str(path))
-            if row is None or row["size"] != stat.st_size or row["mtime"] != stat.st_mtime:
+            if (
+                row is None
+                or row["error"] is not None
+                or row["size"] != stat.st_size
+                or row["mtime"] != stat.st_mtime
+            ):
                 stem, file_date = split_filename(path.name)
                 old = shadowed.get(str(path))
                 if old and old["size"] == stat.st_size:
-                    row = {"id": stem, "path": str(path), "size": stat.st_size, "date": old["date"]}
+                    row = {
+                        "id": stem,
+                        "path": str(path),
+                        "size": stat.st_size,
+                        "mtime": stat.st_mtime,
+                        "date": old["date"],
+                    }
                 else:
-                    row = read_book(path)
+                    try:
+                        row = read_book(path)
+                    except OSError as exc:
+                        log.warning("cannot stat/read %s: %s", path, exc)
+                        if (existing := known.get(str(path))) is not None:
+                            groups.setdefault(existing["id"], []).append(existing)
+                        continue
                     read += 1
-                    self.pool.invalidate(str(path))
+                    to_invalidate.append(str(path))
             groups.setdefault(row["id"], []).append(row)
 
-        self.db.execute("DELETE FROM shadowed")
-        seen: set[str] = set()
+        groups = _split_distinct_books(groups)
+
+        # Resolve best candidate for every group before opening the DB write transaction.
+        resolved: dict[str, tuple[dict[str, Any], list[dict[str, Any]]]] = {}
+        preserved_ids: set[str] = set()
         for book_id, rows in groups.items():
-            rows.sort(key=lambda r: (r.get("error") is None, r["date"]), reverse=True)
-            best = rows[0]
-            if "filename" not in best:  # a previously shadowed file is now the newest
-                best = read_book(Path(best["path"]))
-                read += 1
-            seen.add(book_id)
-            previous = self.db.one("SELECT path FROM books WHERE id = ?", (book_id,))
-            if previous and previous["path"] != best["path"]:
-                self.pool.invalidate(previous["path"])
-            # A different file may previously have held this id or path.
-            self.db.execute("DELETE FROM books WHERE path = ? AND id != ?", (best["path"], book_id))
-            self.db.execute(
-                f"INSERT INTO books ({', '.join(_COLUMNS)}, policy) "
-                f"VALUES ({', '.join(':' + c for c in _COLUMNS)}, :policy) "
-                "ON CONFLICT (id) DO UPDATE SET "
-                + ", ".join(f"{c} = excluded.{c}" for c in _COLUMNS if c != "id"),
-                {**{c: best.get(c) for c in _COLUMNS}, "policy": default_policy},
+            rows.sort(
+                key=lambda r: (
+                    r.get("error") is None,
+                    r["date"],
+                    filename_revision(r["path"]),
+                    r.get("mtime", 0),
+                ),
+                reverse=True,
             )
-            for other in rows[1:]:
+            best: dict[str, Any] | None = None
+            others: list[dict[str, Any]] = []
+            for idx, candidate in enumerate(rows):
+                if "filename" in candidate:
+                    best = candidate
+                    others = rows[idx + 1 :]
+                    break
+                try:
+                    best = read_book(Path(candidate["path"]))
+                    best["id"] = book_id
+                    read += 1
+                    others = rows[idx + 1 :]
+                    break
+                except OSError as exc:
+                    log.warning("cannot read shadowed candidate %s: %s", candidate["path"], exc)
+            if best is None:
+                preserved_ids.add(book_id)
+                continue
+            resolved[book_id] = (best, others)
+
+        seen = set(resolved) | preserved_ids
+        vanished_by_uuid = {
+            r["uuid"]: r for r in known_rows if r["id"] not in seen and r.get("uuid")
+        }
+
+        with self.db.transaction():
+            self.db.execute("DELETE FROM shadowed")
+            for book_id, (best, others) in resolved.items():
+                previous = self.db.one("SELECT path FROM books WHERE id = ?", (book_id,))
+                if previous and previous["path"] != best["path"]:
+                    to_invalidate.append(previous["path"])
+                # A different file may previously have held this id or path.
                 self.db.execute(
-                    "INSERT OR REPLACE INTO shadowed (path, book_id, size, date) "
-                    "VALUES (?, ?, ?, ?)",
-                    (other["path"], book_id, other["size"], other["date"]),
+                    "DELETE FROM books WHERE path = ? AND id != ?", (best["path"], book_id)
                 )
+                policy = default_policy
+                if book_id not in known_ids and best.get("uuid") in vanished_by_uuid:
+                    policy = vanished_by_uuid[best["uuid"]]["policy"]
+                self.db.execute(
+                    f"INSERT INTO books ({', '.join(_COLUMNS)}, policy) "
+                    f"VALUES ({', '.join(':' + c for c in _COLUMNS)}, :policy) "
+                    "ON CONFLICT (id) DO UPDATE SET "
+                    + ", ".join(f"{c} = excluded.{c}" for c in _COLUMNS if c != "id"),
+                    {**{c: best.get(c) for c in _COLUMNS}, "policy": policy},
+                )
+                for other in others:
+                    self.db.execute(
+                        "INSERT OR REPLACE INTO shadowed (path, book_id, size, date) "
+                        "VALUES (?, ?, ?, ?)",
+                        (other["path"], book_id, other["size"], other["date"]),
+                    )
 
-        # Derived from the id and tags, so recompute for every book rather than only new files.
-        file_under_categories(self.db)
+            # Derived from the id and tags, so recompute for every book rather than only new files.
+            file_under_categories(self.db)
 
-        removed = 0
-        for row in known.values():
-            if row["id"] not in seen:
-                self.db.execute("DELETE FROM books WHERE id = ?", (row["id"],))
-                self.pool.invalidate(row["path"])
-                removed += 1
+            removed = 0
+            if not had_walk_error:
+                for row in known_rows:
+                    if row["id"] not in seen:
+                        self.db.execute("DELETE FROM books WHERE id = ?", (row["id"],))
+                        to_invalidate.append(row["path"])
+                        removed += 1
+
+        for p in to_invalidate:
+            self.pool.invalidate(p)
         return {"books": len(seen), "read": read, "removed": removed}
 
     def leftovers(self) -> list[dict[str, Any]]:
         """Files in the data directory that are not part of the library."""
         active = {
-            r["filename"] + ".part"
+            r["filename"] + suffix
             for r in self.db.all(
                 "SELECT filename FROM downloads WHERE state NOT IN ('done', 'cancelled')"
             )
+            for suffix in (".part", ".meta4")
         }
         result = []
-        for path in sorted(self.data_dir.rglob("*")):
-            if not path.is_file() or path.suffix == ".zim" or path.name in active:
-                continue
-            result.append({"path": str(path), "name": path.name, "size": path.stat().st_size})
+        if self.data_dir.is_dir():
+            for path in sorted(self.data_dir.rglob("*")):
+                if any(part.startswith(".") for part in path.relative_to(self.data_dir).parts):
+                    continue
+                if not path.is_file() or path.suffix in (".zim", ".meta4") or path.name in active:
+                    continue
+                try:
+                    size = path.stat().st_size
+                except OSError:
+                    continue
+                result.append({"path": str(path), "name": path.name, "size": size})
         for row in self.db.all("SELECT * FROM shadowed"):
             result.append(
                 {"path": row["path"], "name": os.path.basename(row["path"]), "size": row["size"],

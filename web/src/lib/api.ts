@@ -1,41 +1,126 @@
 const TOKEN_KEY = "kiwix-admin-token";
+const DEFAULT_TIMEOUT_MS = 30_000;
+const MUTATION_METHODS = new Set(["POST", "PUT", "PATCH", "DELETE"]);
+
+let promptDeclined = false;
+
+export function resetAuthPromptState(): void {
+  promptDeclined = false;
+}
+
+function getToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function setToken(token: string): void {
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+  } catch {
+    /* storage blocked */
+  }
+}
+
+function clearToken(): void {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    /* storage blocked */
+  }
+}
 
 export class ApiError extends Error {
-  constructor(
-    public status: number,
-    message: string,
-  ) {
+  status: number;
+  constructor(status: number, message: string) {
     super(message);
+    this.status = status;
   }
 }
 
 export function authHeaders(): Record<string, string> {
-  const token = localStorage.getItem(TOKEN_KEY);
+  const token = getToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
-export async function api<T = any>(path: string, init: RequestInit = {}, retry = true): Promise<T> {
-  const headers = new Headers(init.headers);
-  const token = localStorage.getItem(TOKEN_KEY);
+export function formatErrorDetail(body: unknown, fallback: string): string {
+  if (body && typeof body === "object" && "detail" in body) {
+    const detail = (body as { detail: unknown }).detail;
+    if (typeof detail === "string" && detail) return detail;
+    if (Array.isArray(detail)) {
+      const parts = detail
+        .map((item) => {
+          if (typeof item === "string") return item;
+          if (item && typeof item === "object") {
+            const entry = item as { loc?: unknown; msg?: unknown };
+            const loc = Array.isArray(entry.loc) ? entry.loc.slice(1).join(".") : "";
+            const msg = typeof entry.msg === "string" ? entry.msg : JSON.stringify(item);
+            return loc ? `${loc}: ${msg}` : msg;
+          }
+          return "";
+        })
+        .filter(Boolean);
+      if (parts.length) return parts.join("; ");
+    }
+  }
+  return fallback || "Request failed";
+}
+
+export async function parseResponseError(response: Response): Promise<string> {
+  let message = response.statusText || `HTTP ${response.status}`;
+  try {
+    const body = await response.json();
+    message = formatErrorDetail(body, message);
+  } catch {
+    /* not JSON */
+  }
+  return message;
+}
+
+export interface ApiOptions extends RequestInit {
+  timeoutMs?: number;
+}
+
+export async function api<T = any>(path: string, init: ApiOptions = {}, retry = true): Promise<T> {
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal: callerSignal, ...rest } = init;
+  const headers = new Headers(rest.headers);
+  const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
-  if (init.body) headers.set("Content-Type", "application/json");
-  const response = await fetch(path, { ...init, headers });
-  if (response.status === 401 && retry) {
-    const entered = window.prompt("This server needs the admin token to make changes:");
-    if (entered) {
-      localStorage.setItem(TOKEN_KEY, entered.trim());
-      return api(path, init, false);
+  if (rest.body && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+
+  const controller = new AbortController();
+  const timer = timeoutMs > 0 ? setTimeout(() => controller.abort(new DOMException("Request timed out", "TimeoutError")), timeoutMs) : undefined;
+  const onCallerAbort = () => controller.abort(callerSignal?.reason);
+  if (callerSignal) {
+    if (callerSignal.aborted) controller.abort(callerSignal.reason);
+    else callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+  }
+
+  let response: Response;
+  try {
+    response = await fetch(path, { ...rest, headers, signal: controller.signal });
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    callerSignal?.removeEventListener("abort", onCallerAbort);
+  }
+
+  const method = (rest.method ?? "GET").toUpperCase();
+  if (response.status === 401) {
+    if (token) clearToken();
+    if (retry && MUTATION_METHODS.has(method) && !promptDeclined) {
+      const entered = window.prompt("This server needs the admin token to make changes:");
+      if (entered && entered.trim()) {
+        promptDeclined = false;
+        setToken(entered.trim());
+        return api(path, init, false);
+      }
+      promptDeclined = true;
     }
   }
   if (!response.ok) {
-    let message = response.statusText;
-    try {
-      const body = await response.json();
-      if (typeof body.detail === "string") message = body.detail;
-    } catch {
-      /* not JSON */
-    }
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, await parseResponseError(response));
   }
   return response.json();
 }

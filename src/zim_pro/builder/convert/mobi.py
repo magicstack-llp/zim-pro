@@ -1,9 +1,11 @@
 """MOBI and AZW3 to ZIM pages, by unpacking the Kindle file to the EPUB or HTML inside it."""
 
 import html
+import posixpath
 import re
 import shutil
 from pathlib import Path
+from urllib.parse import unquote
 
 from selectolax.lexbor import LexborHTMLParser as HTMLParser
 
@@ -43,10 +45,24 @@ def convert(
         for node in tree.css("script"):
             node.decompose()
         for node in tree.css("img"):
-            name = (node.attributes.get("src") or "").replace("\\", "/")
-            file = (result.parent / name).resolve()
-            if images and name and file.is_file() and result.parent.resolve() in file.parents:
+            raw = unquote(node.attributes.get("src") or "").replace("\\", "/").strip()
+            name = posixpath.normpath(raw.lstrip("/")) if raw else ""
+            safe = bool(
+                name
+                and name not in (".", "..")
+                and not name.startswith("../")
+                and "/../" not in name
+            )
+            file = (result.parent / name).resolve() if safe else None
+            if (
+                images
+                and safe
+                and file is not None
+                and file.is_file()
+                and result.parent.resolve() in file.parents
+            ):
                 stage.add_resource(f"book/{name}", "image/jpeg", file)
+                node.attrs["src"] = name
             else:
                 node.decompose()
         body = tree.body

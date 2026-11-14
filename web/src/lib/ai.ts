@@ -87,11 +87,15 @@ export function modelOptions(groups: ModelGroup[], only?: (provider: ProviderInf
 /** Every provider with its models. `reload(true)` asks the providers again instead of the cache. */
 export function useModels() {
   const [groups, setGroups] = useState<ModelGroup[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const reload = useCallback((refresh = false) => {
     api<ModelGroup[]>(`/api/ai/models${refresh ? "?refresh=true" : ""}`)
-      .then(setGroups)
-      .catch(() => setGroups([]));
+      .then((result) => {
+        setGroups(result);
+        setError(null);
+      })
+      .catch((reason) => setError(String((reason as Error).message ?? reason)));
   }, []);
   useEffect(() => reload(), [reload]);
-  return { groups, reload };
+  return { groups, error, reload };
 }

@@ -7,6 +7,7 @@ from typing import Any
 from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 
+from . import access
 from .catalog.updates import book_updates
 from .context import Context
 from .library import search as zim_search
@@ -184,6 +185,8 @@ def build_mcp(ctx: Context) -> MCPServer:
         _called("start_update", locals())
         if not ctx.db.get_setting("mcp_allow_writes"):
             return "Updates over MCP are turned off. Enable 'mcp_allow_writes' in the web UI."
+        if not ctx.config.admin_token and not access.has_keys(ctx.db):
+            return "Updates over MCP require an admin token or an MCP key to be configured."
         for item in book_updates(ctx.db):
             if item["book"]["id"] == book and item["status"] == "update":
                 ctx.downloads.enqueue(item["latest"]["uuid"])

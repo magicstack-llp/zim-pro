@@ -17,6 +17,8 @@ import asyncio
 import logging
 import math
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -45,6 +47,10 @@ SHORTLIST_PER_BOOK = 6  # of those, at most this many from one book
 PER_BOOK = 3  # sources from one book, so a single book cannot crowd out the rest
 EXCERPT_CHARS = 2400
 RRF_K = 10
+REST_BOOK_CAP = 25
+REST_DEADLINE_SECONDS = 10.0
+
+_CJK_RE = re.compile(r"[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uac00-\ud7af]")
 
 STOPWORDS = frozenset(
     "a an and are as at be but by can could did do does for from had has have how i if in is it "
@@ -94,8 +100,30 @@ def is_small_talk(message: str) -> bool:
     return bool(_SMALL_TALK.match(" ".join(text.split())))
 
 
+def _tokenize(text: str) -> list[str]:
+    """Split text into lowercase tokens, adding CJK chars and bigrams for unspaced scripts."""
+    tokens: list[str] = []
+    for word in re.findall(r"\w+", text.lower()):
+        tokens.append(word)
+        if _CJK_RE.search(word):
+            cjk = _CJK_RE.findall(word)
+            tokens.extend(cjk)
+            tokens.extend(cjk[i] + cjk[i + 1] for i in range(len(cjk) - 1))
+    return tokens
+
+
 def keywords(text: str) -> list[str]:
-    return [w for w in re.findall(r"\w+", text.lower()) if len(w) > 2 and w not in STOPWORDS]
+    out: list[str] = []
+    for w in re.findall(r"\w+", text.lower()):
+        if _CJK_RE.search(w):
+            if len(w) <= 4:
+                out.append(w)
+            else:
+                cjk = _CJK_RE.findall(w)
+                out.extend(cjk[i] + cjk[i + 1] for i in range(len(cjk) - 1))
+        elif len(w) > 2 and w not in STOPWORDS:
+            out.append(w)
+    return out
 
 
 @dataclass
@@ -171,11 +199,12 @@ def _match_book(name: str, ids: set[str]) -> str | None:
     if name in ids:
         return name
     lowered = name.lower()
-    for candidate in (f"devdocs_en_{lowered}", lowered):
-        if candidate in ids:
-            return candidate
+    by_lower = {i.lower(): i for i in ids}
+    for candidate in (lowered, f"devdocs_en_{lowered}"):
+        if candidate in by_lower:
+            return by_lower[candidate]
     close = sorted(i for i in ids if i.lower().startswith(lowered) or lowered.startswith(i.lower()))
-    return close[0] if close and len(lowered) > 3 else None
+    return close[0] if len(close) == 1 and len(lowered) > 3 else None
 
 
 def parse_plan(reply: str, book_ids: set[str]) -> Plan:
@@ -298,7 +327,7 @@ def choose_focus(
         return list(books)
     # Route on the planned queries when the model made a plan: the question's own words
     # include verbs like "make", which is also the name of a book.
-    terms = the_plan.queries if the_plan.books else keywords(question)
+    terms = the_plan.queries or keywords(question)
     picked = [*the_plan.books, *route_books(terms, books, limit=2)]
     encyclopedia = next((row["id"] for row in books if row.get("category") == "wikipedia"), None)
     if encyclopedia:
@@ -340,6 +369,8 @@ def search_books(
     depth: int,
     candidates: Candidates,
     relax: bool = False,
+    cancel: threading.Event | None = None,
+    deadline: float | None = None,
 ) -> int:
     """Run each ``(query, weight)`` in each book, adding what is found to ``candidates``.
 
@@ -349,11 +380,20 @@ def search_books(
     """
     hits = 0
     for row in books:
+        if cancel and cancel.is_set():
+            break
+        if deadline is not None and time.monotonic() >= deadline:
+            break
         try:
             archive = ctx.pool.get(row["path"])
-        except Exception:
+        except Exception as exc:
+            log.warning("Skipping unreadable book %s (%s): %s", row["id"], row["path"], exc)
             continue
         for query, weight in queries:
+            if cancel and cancel.is_set():
+                break
+            if deadline is not None and time.monotonic() >= deadline:
+                break
             attempts = [query]
             words = query.split()
             if relax and len(words) >= 2:
@@ -361,7 +401,8 @@ def search_books(
             for attempt_number, attempt in enumerate(attempts):
                 try:
                     found = zim_search.search_book(archive, attempt, 0, depth, snippets=False)
-                except Exception:
+                except Exception as exc:
+                    log.warning("Search failed in book %s for %r: %s", row["id"], attempt, exc)
                     break
                 if not found["results"]:
                     continue
@@ -408,7 +449,7 @@ def _passages(
             headings.append(heading)
     if not blocks:
         return 0.0, 0.0, text[:EXCERPT_CHARS]
-    words = [set(re.findall(r"\w+", block.lower())) for block in blocks]
+    words = [set(_tokenize(block)) for block in blocks]
     scored = [
         (len(terms & found) + 0.5 * len(extra & found), -index, index)
         for index, found in enumerate(words)
@@ -423,7 +464,8 @@ def _passages(
             break
         chosen.append(index)
         used += len(block)
-    covered = set().union(*(words[i] for i in chosen))
+    chosen_words = [set(_tokenize(blocks[i][:1200])) for i in chosen]
+    covered = set().union(*chosen_words) if chosen_words else set()
     parts, last = [], ""
     for index in sorted(chosen):
         # Say which section a passage comes from, once per run of passages from it.
@@ -432,9 +474,9 @@ def _passages(
         last = headings[index]
         parts.append(blocks[index][:1200])
     excerpt = "\n\n".join(parts)
-    # Mostly how many of the terms one passage holds together, partly how many the excerpt
-    # holds at all: words scattered one per paragraph down a long page count for little.
-    together = max(len(terms & found) for found in words) / max(1, len(terms))
+    # Mostly how many of the terms one emitted passage holds together, partly how many the
+    # excerpt holds at all: words scattered one per paragraph down a long page count for little.
+    together = max((len(terms & found) for found in chosen_words), default=0) / max(1, len(terms))
     return (
         0.6 * together + 0.4 * len(covered & terms) / max(1, len(terms)),
         len(covered & extra) / max(1, len(extra)),
@@ -460,7 +502,7 @@ def rank(
     terms = {word for query in the_plan.queries for word in query.split()}
     extra = {word for term in the_plan.keywords for word in term.split()} - terms
     for candidate in candidates.values():
-        title_words = set(re.findall(r"\w+", candidate["title"].lower()))
+        title_words = set(_tokenize(candidate["title"]))
         candidate["score"] *= 1 + 0.5 * len((terms | extra) & title_words) / max(1, len(terms))
         if candidate["row"]["id"] in focus_ids:
             candidate["score"] *= 1.15
@@ -483,7 +525,8 @@ def rank(
         row = candidate["row"]
         try:
             article = read_article(ctx.pool.get(row["path"]), candidate["path"])
-        except Exception:
+        except Exception as exc:
+            log.warning("Failed reading article %s in %s: %s", candidate["path"], row["id"], exc)
             continue
         if article is None or not article.mimetype.startswith("text/html"):
             continue
@@ -531,6 +574,12 @@ def rank(
             article = item.pop("article")
             item["media"] = media(article, item["row"]["id"])
             item["original"] = source_url(article)
-        except Exception:
+        except Exception as exc:
+            log.warning(
+                "Failed extracting media for %s in %s: %s",
+                item["path"],
+                item["row"]["id"],
+                exc,
+            )
             item["media"] = []
     return chosen, len(read)
