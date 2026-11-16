@@ -67,6 +67,7 @@ class DownloadManager:
         self.pool = pool
         self.data_dir = data_dir
         self.proxy = proxy or None
+        self.network: Any = None
         self.limiter = RateLimiter()
         self._active: dict[int, _Active] = {}
         self._active_targets: dict[str, int] = {}
@@ -218,6 +219,9 @@ class DownloadManager:
             self._changed()
 
     def resume(self, download_id: int) -> None:
+        active = self._active.get(download_id)
+        if active and active.stop_state == "paused":
+            active.stop_state = "queued"
         self.db.execute(
             "UPDATE downloads SET state = 'queued', error = NULL, finished = NULL, "
             "updated = unixepoch('subsec') WHERE id = ? AND state IN ('paused', 'failed')",
@@ -446,6 +450,7 @@ class DownloadManager:
                 connections=int(self.db.get_setting("connections_per_file")),
                 limiter=self.limiter,
                 proxy=self.proxy,
+                network=self.network,
             )
             self._check_free_space(link.size, download.part)
             active.download = download
@@ -525,6 +530,8 @@ class DownloadManager:
         ) as client:
             response: httpx.Response | None = None
             for attempt in range(3):
+                if self.network is not None:
+                    await self.network.steady()
                 try:
                     response = await client.get(url)
                     if response.status_code in (429, 500, 502, 503, 504) and attempt < 2:

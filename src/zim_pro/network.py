@@ -54,6 +54,7 @@ class Network:
         self._changed_at = float("-inf")  # monotonic; never, so far
         self._steady = asyncio.Event()
         self._steady.set()
+        self._unsteady = asyncio.Event()
         self._changing = asyncio.Lock()
         self._status: dict[str, Any] | None = None
         self._status_at = float("-inf")
@@ -84,9 +85,17 @@ class Network:
     def changes_ip_when_refused(self) -> bool:
         return bool(self.can_change_ip and self.db.get_setting("vpn_change_ip"))
 
+    @property
+    def is_steady(self) -> bool:
+        return self._steady.is_set()
+
     async def steady(self) -> None:
         """Wait out a change of address: requests sent during one would only fail."""
         await self._steady.wait()
+
+    async def wait_changing(self) -> None:
+        """Wait until a change of address begins."""
+        await self._unsteady.wait()
 
     # -- the control server ---------------------------------------------------------
 
@@ -287,6 +296,7 @@ class Network:
             if not forced and time.monotonic() - self._changed_at < CHANGE_EVERY:
                 return False  # the new address is being refused too: waiting is what is left
             self._steady.clear()
+            self._unsteady.set()
             self._publish()
             before: str | None = None
             try:
@@ -306,6 +316,7 @@ class Network:
                 raise NetworkError(self.last_change_error) from exc
             finally:
                 self._changed_at = time.monotonic()
+                self._unsteady.clear()
                 self._steady.set()
                 self.forget()
                 self._publish()

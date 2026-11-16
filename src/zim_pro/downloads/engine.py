@@ -8,6 +8,7 @@ stopped without re-fetching or trusting unverified data.
 """
 
 import asyncio
+import contextlib
 import errno
 import hashlib
 import logging
@@ -17,6 +18,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -41,6 +43,10 @@ class DownloadError(Exception):
 
 class DiskError(DownloadError):
     """Local disk or permission failure that should abort immediately, not penalise mirrors."""
+
+
+class _NetworkChanging(Exception):
+    """Internal signal that the VPN is changing address and in-flight requests should pause."""
 
 
 class RateLimiter:
@@ -113,6 +119,7 @@ class Download:
         on_progress: Callable[["Download"], None] | None = None,
         client: httpx.AsyncClient | None = None,
         proxy: str | None = None,
+        network: Any = None,
     ):
         self.metalink = metalink
         self.target = target
@@ -125,12 +132,25 @@ class Download:
         self.bytes_done = 0
         self.active_connections = 0
         self._client = client
+        self._own_client = client is None
         self._proxy = proxy or None
+        self._network = network
+        self._client_generation = network.generation if network is not None else 0
+        self._client_lock = asyncio.Lock()
         self._fd = -1
         self._fd_lock = threading.Lock()
+        self._stopped = False
         self._segments: asyncio.Queue[list[int]] = asyncio.Queue()
 
     # -- public -----------------------------------------------------------
+
+    def _make_client(self) -> httpx.AsyncClient:
+        return httpx.AsyncClient(
+            follow_redirects=True,
+            timeout=httpx.Timeout(30, read=60),
+            headers={"User-Agent": USER_AGENT},
+            proxy=self._proxy,
+        )
 
     async def run(self) -> None:
         """Download every missing piece, then verify the whole file.
@@ -142,23 +162,17 @@ class Download:
             raise DownloadError("metalink has no SHA-256 checksum")
         if not self.part.exists():
             self.bitmap = Bitmap(self.metalink.piece_count)
+        self._stopped = False
         self._fd = os.open(self.part, os.O_RDWR | os.O_CREAT, 0o644)
-        own_client = self._client is None
-        if own_client:
-            self._client = httpx.AsyncClient(
-                follow_redirects=True,
-                timeout=httpx.Timeout(30, read=60),
-                headers={"User-Agent": USER_AGENT},
-                proxy=self._proxy,
-            )
+        if self._own_client:
+            self._client = self._make_client()
+            self._client_generation = self._network.generation if self._network is not None else 0
         try:
             if os.fstat(self._fd).st_size != self.metalink.size:
                 os.ftruncate(self._fd, self.metalink.size)
-            if self.bitmap.done_count() > 0:
-                if self.metalink.piece_hashes:
-                    await asyncio.to_thread(self._recheck_pieces, True)
-                else:
-                    self.bitmap = Bitmap(self.metalink.piece_count)
+            self._recount()
+            if self.bitmap.done_count() > 0 and self.metalink.piece_hashes:
+                await asyncio.to_thread(self._recheck_pieces, True)
             self._recount()
             for attempt in range(2):
                 await self._fetch_missing()
@@ -170,6 +184,7 @@ class Download:
                     await asyncio.to_thread(self._recheck_pieces, False)
             raise DownloadError("the file does not match its published SHA-256 checksum")
         finally:
+            self._stopped = True
             with self._fd_lock:
                 fd, self._fd = self._fd, -1
                 if fd >= 0:
@@ -177,7 +192,7 @@ class Download:
                         os.fsync(fd)
                     finally:
                         os.close(fd)
-            if own_client and self._client is not None:
+            if self._own_client and self._client is not None:
                 await self._client.aclose()
                 self._client = None
 
@@ -222,9 +237,49 @@ class Download:
             self._segments.put_nowait(run)
         return queued
 
+    async def _ensure_client(self) -> httpx.AsyncClient:
+        if self._network is not None:
+            await self._network.steady()
+        if self._own_client:
+            async with self._client_lock:
+                generation = self._network.generation if self._network is not None else 0
+                if self._client is None or (
+                    self._network is not None and generation != self._client_generation
+                ):
+                    old, self._client = self._client, self._make_client()
+                    self._client_generation = generation
+                    if old is not None:
+                        await old.aclose()
+        assert self._client is not None
+        return self._client
+
+    async def _await_steady(self, awaitable: Any) -> Any:
+        if self._network is None:
+            return await awaitable
+        if not self._network.is_steady:
+            raise _NetworkChanging()
+        task = asyncio.ensure_future(awaitable)
+        watch = asyncio.create_task(self._network.wait_changing())
+        try:
+            done, _ = await asyncio.wait({task, watch}, return_when=asyncio.FIRST_COMPLETED)
+            if watch in done and task not in done:
+                task.cancel()
+                with contextlib.suppress(BaseException):
+                    await task
+                raise _NetworkChanging()
+            return task.result()
+        finally:
+            if not watch.done():
+                watch.cancel()
+                with contextlib.suppress(BaseException):
+                    await watch
+
     async def _fetch_missing(self) -> None:
         stalled = 0
         while True:
+            if self._network is not None:
+                await self._network.steady()
+            gen_before = self._network.generation if self._network is not None else 0
             before = self.bitmap.done_count()
             if not self._plan_segments():
                 return
@@ -240,6 +295,14 @@ class Download:
                 return
             if not any(m.failures < MIRROR_MAX_FAILURES for m in self.mirrors):
                 raise DownloadError("every mirror failed repeatedly")
+            network_changed = (
+                self._network is not None
+                and (not self._network.is_steady or self._network.generation != gen_before)
+            )
+            if network_changed:
+                stalled = 0
+                await self._network.steady()
+                continue
             stalled = 0 if self.bitmap.done_count() > before else stalled + 1
             if stalled >= MAX_STALLED_ROUNDS:
                 raise DownloadError("no progress after repeated retries")
@@ -264,15 +327,26 @@ class Download:
                 return
             mirror.active += 1
             self.active_connections += 1
+            sent_under = self._network.generation if self._network is not None else 0
             try:
                 await self._fetch_segment(mirror, segment)
                 mirror.failures = max(0, mirror.failures - 1)
             except DiskError:
                 raise
+            except _NetworkChanging:
+                assert self._network is not None
+                await self._network.steady()
             except (httpx.HTTPError, DownloadError, OSError) as exc:
-                mirror.failures += 1
-                log.info("%s: %s from %s", self.target.name, exc or type(exc).__name__, mirror.url)
-                await asyncio.sleep(min(10, mirror.failures))
+                if self._network is not None and (
+                    not self._network.is_steady or self._network.generation != sent_under
+                ):
+                    await self._network.steady()
+                else:
+                    mirror.failures += 1
+                    log.info(
+                        "%s: %s from %s", self.target.name, exc or type(exc).__name__, mirror.url
+                    )
+                    await asyncio.sleep(min(10, mirror.failures))
             finally:
                 mirror.active -= 1
                 self.active_connections -= 1
@@ -308,7 +382,7 @@ class Download:
                 raise DownloadError(f"invalid Content-Length: {cl!r}") from exc
 
     async def _fetch_segment(self, mirror: _Mirror, segment: list[int]) -> None:
-        assert self._client is not None
+        client = await self._ensure_client()
         start, _ = self.metalink.piece_range(segment[0])
         last_start, last_length = self.metalink.piece_range(segment[-1])
         end = last_start + last_length - 1
@@ -316,17 +390,22 @@ class Download:
         min_speed = self._effective_min_speed()
         budget = max(SEGMENT_DEADLINE_BASE, (end - start + 1) / min_speed + 60.0)
         try:
-            async with (
-                asyncio.timeout(budget),
-                self._client.stream("GET", mirror.url, headers=headers) as response,
-            ):
+            async with asyncio.timeout(budget), contextlib.AsyncExitStack() as stack:
+                stream = client.stream("GET", mirror.url, headers=headers)
+                response = await self._await_steady(stream.__aenter__())
+                stack.push_async_exit(stream.__aexit__)
                 self._validate_range_response(response, start, end)
                 position = 0
                 index, (offset, length) = segment[0], self.metalink.piece_range(segment[0])
                 buffer = bytearray()
                 started_at = time.monotonic()
                 received = 0
-                async for chunk in response.aiter_bytes(CHUNK_BYTES):
+                chunks = response.aiter_bytes(CHUNK_BYTES).__aiter__()
+                while True:
+                    try:
+                        chunk = await self._await_steady(chunks.__anext__())
+                    except StopAsyncIteration:
+                        break
                     await self.limiter.take(len(chunk))
                     received += len(chunk)
                     elapsed = time.monotonic() - started_at
@@ -379,13 +458,18 @@ class Download:
         """Re-hash pieces on disk and clear the ones that are wrong."""
         hashes = self.metalink.piece_hashes
         for index in range(self.bitmap.count):
+            if self._stopped:
+                return
             if only_done and not self.bitmap[index]:
                 continue
             if not hashes:
                 self.bitmap.set(index, False)
                 continue
             offset, length = self.metalink.piece_range(index)
-            data = os.pread(self._fd, length, offset)
+            with self._fd_lock:
+                if self._stopped or self._fd < 0:
+                    return
+                data = os.pread(self._fd, length, offset)
             self.bitmap.set(
                 index, len(data) == length and hashlib.sha1(data).hexdigest() == hashes[index]
             )
