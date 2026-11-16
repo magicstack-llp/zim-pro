@@ -407,7 +407,9 @@ async def test_download_pauses_and_resumes_across_vpn_change(tmp_path):
 
     gluetun = SlowChangingGluetun()
     db = Database(":memory:")
-    db.set_settings({"vpn_control_url": "http://gluetun:8000", "build_proxy": "http://gluetun:8888"})
+    db.set_settings(
+        {"vpn_control_url": "http://gluetun:8000", "build_proxy": "http://gluetun:8888"}
+    )
     net = Network(db, EventBus(), httpx.MockTransport(gluetun))
 
     data = os.urandom(PIECE * 6)

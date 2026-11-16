@@ -295,9 +295,8 @@ class Download:
                 return
             if not any(m.failures < MIRROR_MAX_FAILURES for m in self.mirrors):
                 raise DownloadError("every mirror failed repeatedly")
-            network_changed = (
-                self._network is not None
-                and (not self._network.is_steady or self._network.generation != gen_before)
+            network_changed = self._network is not None and (
+                not self._network.is_steady or self._network.generation != gen_before
             )
             if network_changed:
                 stalled = 0
