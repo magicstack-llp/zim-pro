@@ -332,3 +332,132 @@ async def test_retry_backoff_all_mirrors_fail_and_checksum_mismatch(tmp_path, mo
     )
     with pytest.raises(DownloadError):
         await dl_corrupt.run()
+
+
+async def test_resumes_without_piece_hashes(tmp_path):
+    data = os.urandom(PIECE * 6)
+    link = make_link(data, ["http://a/book.zim"])
+    link.piece_hashes = []
+    part = tmp_path / "book.zim.part"
+    part.write_bytes(data[: PIECE * 3] + bytes(PIECE * 3))
+    mirror = Mirror(data)
+    download = Download(
+        link,
+        tmp_path / "book.zim",
+        pieces=b"\x07",  # first 3 pieces done
+        connections=1,
+        client=client_for({"a": mirror}),
+    )
+    await download.run()
+    assert part.read_bytes() == data
+    assert min(start for start, _ in mirror.requests) == PIECE * 3
+
+
+async def test_bytes_done_nonzero_during_recheck(tmp_path, monkeypatch):
+    data = os.urandom(PIECE * 4)
+    link = make_link(data, ["http://a/book.zim"])
+    part = tmp_path / "book.zim.part"
+    part.write_bytes(data)
+    observed: list[int] = []
+    download = Download(
+        link,
+        tmp_path / "book.zim",
+        pieces=b"\x0f",
+        client=client_for({"a": Mirror(data)}),
+    )
+    orig_recheck = download._recheck_pieces
+
+    def spy_recheck(only_done: bool = False) -> None:
+        observed.append(download.bytes_done)
+        orig_recheck(only_done)
+
+    monkeypatch.setattr(download, "_recheck_pieces", spy_recheck)
+    await download.run()
+    assert observed == [len(data)]
+
+
+async def test_download_pauses_and_resumes_across_vpn_change(tmp_path):
+    from zim_pro.db import Database
+    from zim_pro.events import EventBus
+    from zim_pro.network import Network
+
+    class SlowChangingGluetun:
+        def __init__(self):
+            self.status = "running"
+            self.connection = 0
+            self.allow_up = asyncio.Event()
+
+        def __call__(self, request: httpx.Request) -> httpx.Response:
+            path = request.url.path
+            if path == "/v1/vpn/status":
+                if request.method == "PUT":
+                    import json
+
+                    wanted = json.loads(request.content)["status"]
+                    if wanted == "running" and self.status == "stopped":
+                        self.connection += 1
+                    self.status = wanted
+                    return httpx.Response(200, json={"outcome": wanted})
+                return httpx.Response(200, json={"status": self.status})
+            if path == "/v1/publicip/ip":
+                if self.status != "running" or (self.connection > 0 and not self.allow_up.is_set()):
+                    return httpx.Response(200, json={"public_ip": ""})
+                return httpx.Response(200, json={"public_ip": f"10.0.0.{self.connection + 1}"})
+            return httpx.Response(404)
+
+    gluetun = SlowChangingGluetun()
+    db = Database(":memory:")
+    db.set_settings(
+        {"vpn_control_url": "http://gluetun:8000", "build_proxy": "http://gluetun:8888"}
+    )
+    net = Network(db, EventBus(), httpx.MockTransport(gluetun))
+
+    data = os.urandom(PIECE * 6)
+    link = make_link(data, ["http://a/book.zim"])
+    first_chunk_seen = asyncio.Event()
+    requests_during_change = 0
+
+    class _SlowBody(httpx.AsyncByteStream):
+        def __init__(self, body: bytes):
+            self.body = body
+
+        async def __aiter__(self):
+            yield self.body[:PIECE]
+            first_chunk_seen.set()
+            await asyncio.sleep(0.05)
+            yield self.body[PIECE:]
+
+    def mirror_handler(request: httpx.Request) -> httpx.Response:
+        nonlocal requests_during_change
+        if not net.is_steady:
+            requests_during_change += 1
+            return httpx.Response(503)
+        start, end = (int(x) for x in request.headers["range"].removeprefix("bytes=").split("-"))
+        body = data[start : end + 1]
+        headers = {
+            "Content-Range": f"bytes {start}-{end}/{len(data)}",
+            "Content-Length": str(len(body)),
+        }
+        if start == 0 and not first_chunk_seen.is_set():
+            return httpx.Response(206, stream=_SlowBody(body), headers=headers)
+        return httpx.Response(206, content=body, headers=headers)
+
+    download = Download(
+        link,
+        tmp_path / "book.zim",
+        connections=1,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(mirror_handler)),
+        network=net,
+    )
+
+    dl_task = asyncio.create_task(download.run())
+    await first_chunk_seen.wait()
+    vpn_task = asyncio.create_task(net.change_ip(forced=True))
+    await asyncio.sleep(0.02)
+    assert not net.is_steady
+    gluetun.allow_up.set()
+    assert await vpn_task is True
+    await dl_task
+    assert download.part.read_bytes() == data
+    assert requests_during_change == 0
+    assert download.mirrors[0].failures == 0

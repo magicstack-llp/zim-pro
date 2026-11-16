@@ -54,7 +54,7 @@ def build_context(config: Config) -> Context:
     builds = BuildManager(db, events, scanner, pool, config.data_dir, config.state_dir, broker)
     feeds = FeedManager(db, events, scanner, pool, config.data_dir, config.state_dir, broker)
     network = Network(db, events)
-    builds.network = feeds.network = network
+    manager.network = builds.network = feeds.network = network
     ctx = Context(config, db, pool, scanner, events, manager, builds, feeds, network, broker)
     ctx.monitor = Monitor(ctx)
     return ctx

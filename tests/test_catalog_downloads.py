@@ -368,3 +368,27 @@ def test_catalog_and_downloads_api_fixes(tmp_path):
 
         assert client.delete("/api/downloads/999999").status_code == 404
         assert client.post("/api/downloads/999999/pause").status_code == 404
+
+
+def test_resume_while_pausing_sets_stop_state_queued(tmp_path):
+    from zim_pro.downloads.manager import _Active
+
+    db, _events, mgr = _make_manager(tmp_path)
+    _seed_catalog(db, uuid="u1")
+    row = mgr.enqueue("u1")
+
+    async def noop():
+        await asyncio.sleep(10)
+
+    loop = asyncio.new_event_loop()
+    try:
+        task = loop.create_task(noop())
+        mgr._active[row["id"]] = _Active(task)
+        mgr.pause(row["id"])
+        assert mgr._active[row["id"]].stop_state == "paused"
+        mgr.resume(row["id"])
+        assert mgr._active[row["id"]].stop_state == "queued"
+        task.cancel()
+        loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
+    finally:
+        loop.close()
