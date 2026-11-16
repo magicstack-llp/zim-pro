@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-11-16
+
+### Fixed
+
+- Pause active ZIM downloads cleanly across VPN IP changes (`Network.wait_changing()` / `Network.steady()`), avoid penalizing mirrors during reconnects, and renew the `httpx.AsyncClient` connection pool when `network.generation` advances.
+- Preserve persisted download progress when resuming large ZIM files: recount `bytes_done` before `_recheck_pieces`, keep the persisted `bitmap` when a Metalink has no per-piece SHA-1 hashes, guard `_recheck_pieces` with `_stopped` and `_fd_lock`, and handle `resume()` while a `pause()` is still winding down.
+
 ## [0.5.2] - 2026-11-15
 
 ### Fixed
@@ -252,7 +259,8 @@ First release.
 - **Packaging.** A Docker image for amd64 and arm64 on GHCR, and a Python wheel with the web
   app inside, both published by a release workflow when a version tag is pushed.
 
-[Unreleased]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.2...HEAD
+[Unreleased]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.3...HEAD
+[0.5.3]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.0...v0.5.1
 [0.5.0]: https://github.com/magicstack-llp/zim-pro/compare/v0.4.0...v0.5.0
