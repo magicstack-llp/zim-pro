@@ -167,12 +167,9 @@ function SourceLink({
   );
 }
 
-function Spark({ spinning = false }: { spinning?: boolean }) {
-  return (
-    <span className="from-brand-500 mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-gradient-to-br to-sky-500 text-white shadow-sm" aria-hidden>
-      <Icon d={ICONS.spark} className={`h-4 w-4 ${spinning ? "animate-pulse" : ""}`} />
-    </span>
-  );
+/** The Zim Pro elephant beside each answer; its white tile reads in both themes. */
+function Mark() {
+  return <img src="/icon-192.png" alt="" className="mt-0.5 h-7 w-7 shrink-0 rounded-full bg-white ring-1 ring-zinc-200 dark:ring-0" />;
 }
 
 function SourceCard({ source, hot, onHover }: { source: Source; hot: boolean; onHover?: (n: number | null) => void }) {
@@ -472,7 +469,7 @@ function Answer({
     <div className={`rise ${ROW}`} data-answer>
       <div className="flex min-w-0 gap-3.5">
         <span className="hidden sm:block">
-          <Spark spinning={message.pending} />
+          <Mark />
         </span>
         <div className="min-w-0 flex-1">
           {!!message.steps?.length && <Steps steps={message.steps} live={!!message.pending} />}
@@ -664,14 +661,14 @@ function History({
       <div className="space-y-2 p-3">
         <ErrorNote message={problem} />
         <button
-          className="from-brand-600 hover:from-brand-500 flex w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r to-sky-600 px-3 py-2 text-sm font-medium text-white shadow-sm transition hover:to-sky-500 hover:shadow"
+          className="bg-brand-700 hover:bg-brand-600 dark:bg-brand-600 dark:hover:bg-brand-500 flex w-full items-center justify-center gap-2 rounded-xl px-3 py-2 text-sm font-medium text-white transition-colors"
           onClick={onNew}
         >
           <Icon d={ICONS.plus} />
           New chat
         </button>
         {chats.length > 6 && (
-          <label className="flex items-center gap-2 rounded-xl bg-zinc-200/60 px-3 py-1.5 dark:bg-zinc-800">
+          <label className="flex items-center gap-2 rounded-xl bg-zinc-200/60 px-3 py-1.5 focus-within:ring-2 focus-within:ring-brand-500/40 dark:bg-zinc-800">
             <Icon d={ICONS.search} className="muted h-3.5 w-3.5" />
             <input
               type="search"
@@ -689,7 +686,7 @@ function History({
         {chats.length > 0 && shown.length === 0 && <p className="muted px-3 py-2 text-sm">No chats match.</p>}
         {groupByAge(shown).map(([label, items]) => (
           <div key={label} className="mb-4">
-            <h3 className="muted px-3 pb-1 text-[11px] font-semibold tracking-wider uppercase">{label}</h3>
+            <h3 className="muted px-3 pb-1 text-xs font-medium">{label}</h3>
             <ul>
               {items.map((chat) => (
                 <li key={chat.id} className="group relative">
@@ -1027,7 +1024,7 @@ export default function Ask() {
             </button>
           ) : (
             <button
-              className="from-brand-600 flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br to-sky-600 text-white shadow-sm transition hover:brightness-110 disabled:from-zinc-200 disabled:to-zinc-200 disabled:text-zinc-400 disabled:shadow-none dark:disabled:from-zinc-800 dark:disabled:to-zinc-800 dark:disabled:text-zinc-600"
+              className="bg-brand-700 hover:bg-brand-600 dark:bg-brand-600 dark:hover:bg-brand-500 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-white transition-colors disabled:bg-zinc-200 disabled:text-zinc-400 dark:disabled:bg-zinc-800 dark:disabled:text-zinc-600"
               disabled={!text.trim() || !ready}
               title="Send"
               aria-label="Send"
@@ -1074,7 +1071,7 @@ export default function Ask() {
 
       {sourcePanel && !wide && <SourcesPanel sources={sourcePanel.sources} hot={sourcePanel.hot} onClose={() => setSourcePanel(null)} />}
 
-      <section className={`relative flex min-w-0 flex-1 flex-col ${blank ? "ask-glow" : ""}`}>
+      <section className="relative flex min-w-0 flex-1 flex-col">
         <header className="relative flex h-12 shrink-0 items-center gap-1 px-2">
           <button className={`${ICON_BUTTON} lg:hidden`} onClick={() => setDrawer(true)} title="Chats" aria-label="Show chats">
             <Icon d={ICONS.menu} />
@@ -1093,33 +1090,40 @@ export default function Ask() {
         </header>
 
         {blank ? (
-          <div className="relative flex flex-1 flex-col items-center overflow-y-auto px-4 pt-[6vh] pb-6 kb:pt-1 kb:pb-2 sm:justify-center sm:pt-0 sm:pb-[10vh]">
+          <div className="relative flex flex-1 flex-col items-center overflow-y-auto px-4 pt-[6vh] pb-6 kb:pt-1 kb:pb-2 sm:justify-center-safe sm:pt-0 sm:pb-[10vh]">
             <div className="w-full max-w-2xl space-y-6 kb:space-y-3 sm:space-y-7">
               <div className="rise text-center">
-                <span className="from-brand-500 mx-auto mb-5 flex h-14 w-14 kb:hidden items-center justify-center rounded-2xl bg-gradient-to-br to-sky-500 text-white shadow-lg shadow-teal-500/20">
-                  <Icon d={ICONS.spark} className="h-7 w-7" />
-                </span>
-                <h2 className="text-[2.1rem] leading-tight font-semibold tracking-tight kb:text-2xl sm:text-5xl">
-                  Ask your{" "}
-                  <span className="from-brand-600 dark:from-brand-400 bg-gradient-to-r to-sky-600 bg-clip-text text-transparent dark:to-sky-400">library</span>
-                </h2>
+                <img
+                  src="/icon-192.png"
+                  alt=""
+                  className="mx-auto mb-5 h-16 w-16 kb:hidden rounded-2xl bg-white ring-1 ring-zinc-200 dark:ring-0 [@media(max-height:520px)]:hidden"
+                />
+                <h2 className="text-[2.1rem] leading-tight font-semibold tracking-tight kb:text-2xl sm:text-5xl">Ask your library</h2>
                 <p className="muted mx-auto mt-3 max-w-md text-[15px] kb:hidden">
                   Answers written from the articles in your books, with every source one click away.
                 </p>
               </div>
               <ErrorNote message={status.error ?? books.error ?? chats.error ?? modelsError} />
               {setup}
+              {ready && books.data?.length === 0 && (
+                <p className="w-full rounded-2xl border border-amber-300 bg-amber-50 px-5 py-3 text-sm dark:border-amber-900 dark:bg-amber-950/40">
+                  Your library has no books yet, so answers can only come from the model{webReady ? " or the web" : ""}.{" "}
+                  <Link className="text-brand-700 dark:text-brand-400 font-medium underline underline-offset-2" to="/catalog">
+                    Download books from the Catalog
+                  </Link>
+                </p>
+              )}
               {composer}
               {ready && suggestions.length > 0 && (
-                <div className="grid gap-2.5 kb:hidden sm:grid-cols-2">
+                <div className={`grid gap-2.5 kb:hidden ${suggestions.length > 1 ? "sm:grid-cols-2" : ""}`}>
                   {suggestions.map(([label, prompt]) => (
                     <button
                       key={prompt}
                       disabled={busy}
-                      className="group rounded-2xl border border-zinc-200 bg-white/70 px-4 py-3 text-left transition hover:-translate-y-0.5 hover:border-zinc-300 hover:bg-white hover:shadow-md disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900/60 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
+                      className="group rounded-2xl border border-zinc-200 bg-white/70 px-4 py-3 text-left transition-colors hover:border-zinc-300 hover:bg-white disabled:opacity-50 dark:border-zinc-800 dark:bg-zinc-900/60 dark:hover:border-zinc-700 dark:hover:bg-zinc-900"
                       onClick={() => !busyRef.current && ready && void ask(prompt)}
                     >
-                      <span className="text-brand-700 dark:text-brand-400 text-[11px] font-semibold tracking-wider uppercase">{label}</span>
+                      <span className="text-brand-700 dark:text-brand-400 text-xs font-medium">{label}</span>
                       <span className="mt-0.5 block text-sm text-zinc-700 dark:text-zinc-200">{prompt}</span>
                     </button>
                   ))}

@@ -63,6 +63,24 @@ html.app-screen body {
   overflow: hidden;
 }
 
+/* One focus ring for keyboard users, in the brand teal. Controls that draw their own
+   focus style (the composer, .input) opt out with outline-none. The colour is set on every
+   element, not only on focus, so Tailwind's `transition` (which animates outline-color)
+   has nothing to fade and the ring appears at once. */
+@layer base {
+  * {
+    outline-color: var(--color-brand-600);
+  }
+  .dark * {
+    outline-color: var(--color-brand-400);
+  }
+  :focus-visible {
+    outline-style: solid;
+    outline-width: 2px;
+    outline-offset: 2px;
+  }
+}
+
 body {
   @apply bg-zinc-50 text-zinc-900 antialiased dark:bg-zinc-950 dark:text-zinc-100;
   -webkit-tap-highlight-color: transparent;
@@ -170,14 +188,6 @@ body {
     box-shadow:
       0 0 0 4px color-mix(in oklab, var(--color-brand-500) 14%, transparent),
       0 8px 28px -8px rgb(0 0 0 / 0.18);
-  }
-  /* The soft colour wash behind the empty chat screen. */
-  .ask-glow::before {
-    content: "";
-    @apply pointer-events-none absolute inset-0;
-    background:
-      radial-gradient(42rem 22rem at 50% 12%, color-mix(in oklab, var(--color-brand-400) 16%, transparent), transparent 70%),
-      radial-gradient(30rem 18rem at 72% 30%, rgb(56 189 248 / 0.1), transparent 70%);
   }
   .rise {
     animation: rise 0.35s ease-out both;

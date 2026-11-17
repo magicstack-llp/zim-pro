@@ -19,6 +19,11 @@ export function count(value: number): string {
   return value.toLocaleString();
 }
 
+/** "1 article", "11,901 articles". */
+export function plural(value: number, word: string): string {
+  return `${count(value)} ${word}${value === 1 ? "" : "s"}`;
+}
+
 export function ago(timestamp: number | null): string {
   if (!timestamp) return "never";
   const seconds = Date.now() / 1000 - timestamp;
