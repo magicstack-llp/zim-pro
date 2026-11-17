@@ -92,9 +92,31 @@ def test_content_csp_nosniff_and_etag(tmp_path: Path):
     csp = resp.headers["content-security-policy"]
     assert "sandbox allow-scripts allow-forms allow-popups" in csp
     assert "allow-same-origin" not in csp
-    assert "connect-src 'none'" in csp
+    # Book pages may fetch book files, never /api.
+    assert "connect-src http://testserver/content/ data: blob:;" in csp
+    assert "access-control-allow-origin" not in resp.headers
     assert resp.headers["x-content-type-options"] == "nosniff"
+
+    # Requests from the sandboxed book page (origin "null") get CORS, so ZIMs that are
+    # JavaScript apps (Maps2ZIM) can load their module scripts and data.
+    sandboxed = client.get("/content/sample_en/A/index", headers={"Origin": "null"})
+    assert sandboxed.headers["access-control-allow-origin"] == "null"
+    assert "Origin" in sandboxed.headers["vary"]
+    # Pages get the storage stand-in before their own scripts, and the length matches it.
+    if resp.headers["content-type"].startswith("text/html"):
+        assert b"Object.defineProperty(document" in resp.content
+        assert int(resp.headers["content-length"]) == len(resp.content)
+        part = client.get("/content/sample_en/A/index", headers={"Range": "bytes=0-9"})
+        assert part.status_code == 206
+        assert part.content == resp.content[:10]
+        assert part.headers["content-range"].endswith(f"/{len(resp.content)}")
+
+    # Ordinary cross-origin sites still get no CORS.
+    other = client.get("/content/sample_en/A/index", headers={"Origin": "https://evil.example"})
+    assert "access-control-allow-origin" not in other.headers
     assert resp.headers["cache-control"].startswith("private")
+    # Pages are revalidated every time, so changes to the injected script reach them.
+    assert "no-cache" in resp.headers["cache-control"]
     assert "last-modified" in resp.headers
     etag1 = resp.headers["etag"]
 
