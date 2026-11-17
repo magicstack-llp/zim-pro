@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/logo.png" alt="Zim Pro logo: an elephant with a ball" width="180">
+  <img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/assets/logo.png" alt="Zim Pro logo: an elephant with a ball" width="180">
 </p>
 
 <h1 align="center">Zim Pro</h1>
@@ -31,46 +31,46 @@ It replaces `kiwix-serve`.
 ## Screenshots
 
 <p align="center">
-  <a href="screenshots/ask.png"><img src="screenshots/ask.png" alt="Ask AI: an answer written from the library, with numbered citations and the sources beside it" width="100%"></a>
+  <a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask.png" alt="Ask AI: an answer written from the library, with numbered citations and the sources beside it" width="100%"></a>
   <br><sub>Ask AI: an answer written from your books, with citations and the sources beside it</sub>
 </p>
 
 <table>
   <tr>
-    <td width="50%" valign="top"><a href="screenshots/ask-media.png"><img src="screenshots/ask-media.png" alt="Pictures and videos from the sources, under the answer" width="100%"></a><br><sub>Pictures and videos from the sources, under the answer</sub></td>
-    <td width="50%" valign="top"><a href="screenshots/search.png"><img src="screenshots/search.png" alt="Search across every book, with search history" width="100%"></a><br><sub>Search across every book, with search history</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask-media.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask-media.png" alt="Pictures and videos from the sources, under the answer" width="100%"></a><br><sub>Pictures and videos from the sources, under the answer</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/search.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/search.png" alt="Search across every book, with search history" width="100%"></a><br><sub>Search across every book, with search history</sub></td>
   </tr>
   <tr>
-    <td width="50%" valign="top"><a href="screenshots/library.png"><img src="screenshots/library.png" alt="The library" width="100%"></a><br><sub>The library</sub></td>
-    <td width="50%" valign="top"><a href="screenshots/markdown.png"><img src="screenshots/markdown.png" alt="Any article as Markdown, with its pictures" width="100%"></a><br><sub>Any article as Markdown, with its pictures</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/library.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/library.png" alt="The library" width="100%"></a><br><sub>The library</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/markdown.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/markdown.png" alt="Any article as Markdown, with its pictures" width="100%"></a><br><sub>Any article as Markdown, with its pictures</sub></td>
   </tr>
   <tr>
-    <td width="50%" valign="top"><a href="screenshots/updates.png"><img src="screenshots/updates.png" alt="Updates from the Kiwix catalog" width="100%"></a><br><sub>Updates from the Kiwix catalog</sub></td>
-    <td width="50%" valign="top"><a href="screenshots/settings.png"><img src="screenshots/settings.png" alt="Settings, in sections: AI, queues, monitoring, logs and more" width="100%"></a><br><sub>Settings, in sections: AI, queues, monitoring, logs and more</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/updates.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/updates.png" alt="Updates from the Kiwix catalog" width="100%"></a><br><sub>Updates from the Kiwix catalog</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/settings.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/settings.png" alt="Settings, in sections: AI, queues, monitoring, logs and more" width="100%"></a><br><sub>Settings, in sections: AI, queues, monitoring, logs and more</sub></td>
   </tr>
   <tr>
-    <td width="50%" valign="top"><a href="screenshots/create.png"><img src="screenshots/create.png" alt="Create: your own ZIMs from web links, each with its own schedule" width="100%"></a><br><sub>Create: your own ZIMs from web links, each with its own schedule</sub></td>
-    <td width="50%" valign="top"><a href="screenshots/create-link.png"><img src="screenshots/create-link.png" alt="A link's settings: rebuild schedule, sitemaps and RSS feeds" width="100%"></a><br><sub>A link's settings: rebuild schedule, sitemaps and RSS feeds</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create.png" alt="Create: your own ZIMs from web links, each with its own schedule" width="100%"></a><br><sub>Create: your own ZIMs from web links, each with its own schedule</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create-link.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create-link.png" alt="A link's settings: rebuild schedule, sitemaps and RSS feeds" width="100%"></a><br><sub>A link's settings: rebuild schedule, sitemaps and RSS feeds</sub></td>
   </tr>
   <tr>
-    <td width="50%" valign="top"><a href="screenshots/create-jobs.png"><img src="screenshots/create-jobs.png" alt="Build jobs, with what each one saved" width="100%"></a><br><sub>Build jobs, with what each one saved</sub></td>
-    <td width="50%" valign="top"><a href="screenshots/feeds.png"><img src="screenshots/feeds.png" alt="Feeds: ZIMs kept up to date from RSS and Atom feeds" width="100%"></a><br><sub>Feeds: ZIMs kept up to date from RSS and Atom feeds</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create-jobs.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/create-jobs.png" alt="Build jobs, with what each one saved" width="100%"></a><br><sub>Build jobs, with what each one saved</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/feeds.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/feeds.png" alt="Feeds: ZIMs kept up to date from RSS and Atom feeds" width="100%"></a><br><sub>Feeds: ZIMs kept up to date from RSS and Atom feeds</sub></td>
   </tr>
   <tr>
-    <td width="50%" valign="top"><a href="screenshots/monitoring.png"><img src="screenshots/monitoring.png" alt="Monitoring: health checks and the last hour of resources and traffic" width="100%"></a><br><sub>Monitoring: health checks, resources and traffic</sub></td>
+    <td width="50%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/monitoring.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/monitoring.png" alt="Monitoring: health checks and the last hour of resources and traffic" width="100%"></a><br><sub>Monitoring: health checks, resources and traffic</sub></td>
     <td width="50%" valign="top"></td>
   </tr>
 </table>
 
 <table>
   <tr>
-    <td width="60%" valign="top"><a href="screenshots/ask-dark.png"><img src="screenshots/ask-dark.png" alt="The dark theme" width="100%"></a><br><sub>The dark theme</sub></td>
-    <td width="20%" valign="top"><a href="screenshots/phone-ask.png"><img src="screenshots/phone-ask.png" alt="Ask AI on a phone" width="100%"></a><br><sub>On a phone</sub></td>
-    <td width="20%" valign="top"><a href="screenshots/phone-library.png"><img src="screenshots/phone-library.png" alt="The library on a phone" width="100%"></a><br><sub>Library on a phone</sub></td>
+    <td width="60%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask-dark.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/ask-dark.png" alt="The dark theme" width="100%"></a><br><sub>The dark theme</sub></td>
+    <td width="20%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/phone-ask.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/phone-ask.png" alt="Ask AI on a phone" width="100%"></a><br><sub>On a phone</sub></td>
+    <td width="20%" valign="top"><a href="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/phone-library.png"><img src="https://raw.githubusercontent.com/magicstack-llp/zim-pro/master/screenshots/phone-library.png" alt="The library on a phone" width="100%"></a><br><sub>Library on a phone</sub></td>
   </tr>
 </table>
 
-The screenshots are in [`screenshots/`](screenshots). The articles and pictures shown in them
+The screenshots are in [`screenshots/`](https://github.com/magicstack-llp/zim-pro/blob/master/screenshots). The articles and pictures shown in them
 come from Wikipedia and Appropedia, which publish them under Creative Commons licences. The
 links and feeds shown on the Create and Feeds pages are public sites used as examples.
 
@@ -152,19 +152,19 @@ docker compose up -d
 
 #### Ready-made files
 
-The [`docker/`](docker) folder has complete compose files for each setup, with their
+The [`docker/`](https://github.com/magicstack-llp/zim-pro/blob/master/docker) folder has complete compose files for each setup, with their
 values in one `.env` file. Copy the folder, pick a file, and start it:
 
 | File | What you get |
 |---|---|
-| [`compose.yml`](docker/compose.yml) | Zim Pro on its own |
-| [`compose.solver.yml`](docker/compose.solver.yml) | + captcha solver (FlareSolverr) |
-| [`compose.vpn.yml`](docker/compose.vpn.yml) | + VPN (Gluetun) for links and feeds, with the solver inside it |
-| [`compose.vpn-external.yml`](docker/compose.vpn-external.yml) | Uses a Gluetun you already run elsewhere |
-| [`compose.vpn-all.yml`](docker/compose.vpn-all.yml) | All of Zim Pro's traffic through the VPN |
-| [`compose.zimit.yml`](docker/compose.zimit.yml) | + browser capture (Zimit) |
-| [`compose.redis.yml`](docker/compose.redis.yml) | + Redis for the queues and a stream of the logs |
-| [`compose.full.yml`](docker/compose.full.yml) | VPN, solver, browser capture and Redis together |
+| [`compose.yml`](https://github.com/magicstack-llp/zim-pro/blob/master/docker/compose.yml) | Zim Pro on its own |
+| [`compose.solver.yml`](https://github.com/magicstack-llp/zim-pro/blob/master/docker/compose.solver.yml) | + captcha solver (FlareSolverr) |
+| [`compose.vpn.yml`](https://github.com/magicstack-llp/zim-pro/blob/master/docker/compose.vpn.yml) | + VPN (Gluetun) for links and feeds, with the solver inside it |
+| [`compose.vpn-external.yml`](https://github.com/magicstack-llp/zim-pro/blob/master/docker/compose.vpn-external.yml) | Uses a Gluetun you already run elsewhere |
+| [`compose.vpn-all.yml`](https://github.com/magicstack-llp/zim-pro/blob/master/docker/compose.vpn-all.yml) | All of Zim Pro's traffic through the VPN |
+| [`compose.zimit.yml`](https://github.com/magicstack-llp/zim-pro/blob/master/docker/compose.zimit.yml) | + browser capture (Zimit) |
+| [`compose.redis.yml`](https://github.com/magicstack-llp/zim-pro/blob/master/docker/compose.redis.yml) | + Redis for the queues and a stream of the logs |
+| [`compose.full.yml`](https://github.com/magicstack-llp/zim-pro/blob/master/docker/compose.full.yml) | VPN, solver, browser capture and Redis together |
 
 ```sh
 cd docker
@@ -173,7 +173,7 @@ mkdir -p zims state
 docker compose -f compose.vpn.yml up -d
 ```
 
-[`docker/README.md`](docker/README.md) says which to choose.
+[`docker/README.md`](https://github.com/magicstack-llp/zim-pro/blob/master/docker/README.md) says which to choose.
 
 #### Full example: with a VPN, a captcha solver and browser capture
 
@@ -300,13 +300,13 @@ Removing the container loses nothing: the books are in `zims` and the settings, 
 download progress are in `state`. A download in progress when the container stops carries on
 from where it was when it starts again.
 
-To stay on one version, use a version tag in place of `latest`, such as `:0.5.0` or `:0.5`.
+To stay on one version, use a version tag in place of `latest`, such as `:0.5.4` or `:0.5`.
 
 ### Build the image yourself
 
 The `compose.yml` in this repository builds the image from source. It is the full setup
 (VPN, captcha solver and browser capture), so it needs the VPN values in `.env`; see
-[`docker/.env.example`](docker/.env.example). To build and run Zim Pro alone:
+[`docker/.env.example`](https://github.com/magicstack-llp/zim-pro/blob/master/docker/.env.example). To build and run Zim Pro alone:
 
 ```sh
 mkdir -p zims state
@@ -324,8 +324,8 @@ it, with the web app included in both.
 **Standalone executable** for Linux (x86-64 and arm64). One file, no Python needed:
 
 ```sh
-tar -xzf zim-pro-0.5.0-linux-x86_64.tar.gz
-cd zim-pro-0.5.0-linux-x86_64
+tar -xzf zim-pro-0.5.4-linux-x86_64.tar.gz
+cd zim-pro-0.5.4-linux-x86_64
 KIWIX_DATA_DIR=/path/to/zims KIWIX_STATE_DIR=./state ./zim-pro   # http://localhost:8080
 ```
 
@@ -499,7 +499,7 @@ The first capture downloads the Zimit image (about 1.5 GB).
 
 ### Sites that block or check visitors: captcha solver and VPN
 
-Two optional helper containers come with the compose files in [`docker/`](docker):
+Two optional helper containers come with the compose files in [`docker/`](https://github.com/magicstack-llp/zim-pro/blob/master/docker):
 `compose.solver.yml` has the solver, `compose.vpn.yml` the VPN with the solver inside it.
 They apply to pages
 fetched by the built-in crawler and by Feeds, not to Zimit captures, the catalog or ZIM
@@ -678,7 +678,7 @@ of each queue and whether it is paused are kept in Redis instead: a sorted set
 key `zimpro:queue:<name>:paused`, which you can read and change with `redis-cli` or any
 other tool; Zim Pro follows within five seconds. The database still keeps the record of
 every job, so if Redis stops the queues carry on from it, and Redis is filled again when
-it is back. [`docker/compose.redis.yml`](docker/compose.redis.yml) runs the two together.
+it is back. [`docker/compose.redis.yml`](https://github.com/magicstack-llp/zim-pro/blob/master/docker/compose.redis.yml) runs the two together.
 
 **Monitoring** runs health checks (free disk space for the library and the state folder,
 the database, how promptly the server answers, memory, Redis, the VPN, the captcha solver,
@@ -750,9 +750,9 @@ uv run pytest
 
 ## Contributing
 
-Bug reports, ideas and pull requests are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md) for
-how to set up, run the checks and send a change, and the [Code of Conduct](CODE_OF_CONDUCT.md).
-Please report security problems privately, as [SECURITY.md](SECURITY.md) describes.
+Bug reports, ideas and pull requests are welcome: see [CONTRIBUTING.md](https://github.com/magicstack-llp/zim-pro/blob/master/CONTRIBUTING.md) for
+how to set up, run the checks and send a change, and the [Code of Conduct](https://github.com/magicstack-llp/zim-pro/blob/master/CODE_OF_CONDUCT.md).
+Please report security problems privately, as [SECURITY.md](https://github.com/magicstack-llp/zim-pro/blob/master/SECURITY.md) describes.
 
 ## Built with
 
@@ -776,7 +776,7 @@ The package version comes from the tag, and the release notes from that version'
 tagging.
 
 ```sh
-git tag v0.5.0 && git push origin v0.5.0
+git tag v0.5.4 && git push origin v0.5.4
 ```
 
 Every push to `master` and every pull request runs `.github/workflows/ci.yml`: Python lint
@@ -787,7 +787,7 @@ Every push to `master` and every pull request runs `.github/workflows/ci.yml`: P
 Copyright (C) 2026 Kuldip Satpute and Magicstack Enterprise LLP.
 
 Zim Pro is free software: you can redistribute it and/or modify it under the terms of the
-[GNU General Public License, version 3](LICENSE), as published by the Free Software
+[GNU General Public License, version 3](https://github.com/magicstack-llp/zim-pro/blob/master/LICENSE), as published by the Free Software
 Foundation. It is distributed in the hope that it will be useful, but WITHOUT ANY
 WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
 PURPOSE. See the licence for details.

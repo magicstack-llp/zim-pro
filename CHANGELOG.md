@@ -7,8 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-11-17
+
 ### Fixed
 
+- PyPI page: the README's images and links are absolute GitHub URLs, so the screenshots and logo show on pypi.org.
 - Reader: ZIMs that are JavaScript apps load again inside the sandboxed reader. Maps2ZIM showed a blank page and Gutenberg showed no books.
   - `/content` now answers sandboxed pages (`Origin: null`) with `Access-Control-Allow-Origin: null`.
   - Book pages may `fetch()` other `/content/` files; `/api` stays blocked.
@@ -26,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ask uses the Zim Pro elephant in place of the gradient sparkle tile and answer avatar.
 - Ask: the gradient headline, colour wash and gradient buttons are replaced with solid brand teal.
 - One teal `:focus-visible` ring across the app.
+- README: the Ask screenshots are retaken to show the new look.
 
 ## [0.5.3] - 2026-11-16
 
@@ -279,7 +283,8 @@ First release.
 - **Packaging.** A Docker image for amd64 and arm64 on GHCR, and a Python wheel with the web
   app inside, both published by a release workflow when a version tag is pushed.
 
-[Unreleased]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.3...HEAD
+[Unreleased]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.4...HEAD
+[0.5.4]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.3...v0.5.4
 [0.5.3]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.2...v0.5.3
 [0.5.2]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.1...v0.5.2
 [0.5.1]: https://github.com/magicstack-llp/zim-pro/compare/v0.5.0...v0.5.1
