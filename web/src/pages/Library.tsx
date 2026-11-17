@@ -1,10 +1,10 @@
-import { useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useMemo } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { readUrl, type Book, type Status } from "../lib/api";
-import { bytes, count, language } from "../lib/format";
+import { bytes, language, plural } from "../lib/format";
 import { useData } from "../lib/live";
 import { ScopeBar } from "../Scope";
-import { BookIcon, Empty, ErrorNote, PageHeader } from "../ui";
+import { BookIcon, Empty, ErrorNote, Loading, PageHeader } from "../ui";
 
 export const bookIcon = (book: Pick<Book, "id" | "has_illustration">) =>
   book.has_illustration ? `/api/books/${encodeURIComponent(book.id)}/illustration` : null;
@@ -12,11 +12,25 @@ export const bookIcon = (book: Pick<Book, "id" | "has_illustration">) =>
 export default function Library() {
   const books = useData<Book[]>("/api/books");
   const status = useData<Status>("/api/status");
-  const [filter, setFilter] = useState("");
-  const [lang, setLang] = useState("");
-  const [scope, setScope] = useState({ category: "", book: "" });
-  const { category, book: only } = scope;
-  const [sort, setSort] = useState("title");
+  // The view lives in the URL, so Back from a book returns to the same filtered list.
+  const [params, setParams] = useSearchParams();
+  const filter = params.get("q") ?? "";
+  const lang = params.get("lang") ?? "";
+  const category = params.get("category") ?? "";
+  const only = params.get("book") ?? "";
+  const sort = params.get("sort") ?? "title";
+  const update = (changes: Record<string, string>) =>
+    setParams(
+      (current) => {
+        const next = new URLSearchParams(current);
+        for (const [key, value] of Object.entries(changes)) {
+          if (value && !(key === "sort" && value === "title")) next.set(key, value);
+          else next.delete(key);
+        }
+        return next;
+      },
+      { replace: true },
+    );
 
   const languages = useMemo(
     () => [...new Set((books.data ?? []).flatMap((b) => b.language.split(",")).filter(Boolean))].sort(),
@@ -51,16 +65,18 @@ export default function Library() {
         title="Library"
         subtitle={
           status.data &&
-          `${count(status.data.books)} books · ${bytes(status.data.library_bytes)} · ${bytes(status.data.disk_free)} free`
+          `${plural(status.data.books, "book")} · ${bytes(status.data.library_bytes)} · ${bytes(status.data.disk_free)} free`
         }
       >
         <input
           className="input w-full sm:w-56"
+          type="search"
           placeholder="Filter books…"
+          aria-label="Filter books"
           value={filter}
-          onChange={(e) => setFilter(e.target.value)}
+          onChange={(e) => update({ q: e.target.value })}
         />
-        <select className="input w-auto flex-1 sm:flex-none" value={lang} onChange={(e) => setLang(e.target.value)} aria-label="Language">
+        <select className="input w-auto flex-1 sm:flex-none" value={lang} onChange={(e) => update({ lang: e.target.value })} aria-label="Language">
           <option value="">All languages</option>
           {languages.map((code) => (
             <option key={code} value={code}>
@@ -68,7 +84,7 @@ export default function Library() {
             </option>
           ))}
         </select>
-        <select className="input w-auto flex-1 sm:flex-none" value={sort} onChange={(e) => setSort(e.target.value)} aria-label="Sort by">
+        <select className="input w-auto flex-1 sm:flex-none" value={sort} onChange={(e) => update({ sort: e.target.value })} aria-label="Sort by">
           <option value="title">Title A–Z</option>
           <option value="title-desc">Title Z–A</option>
           <option value="date">Newest first</option>
@@ -80,8 +96,9 @@ export default function Library() {
       </PageHeader>
       <ErrorNote message={books.error} />
       <div className="mb-4">
-        <ScopeBar books={books.data ?? []} category={category} book={only} onChange={setScope} />
+        <ScopeBar books={books.data ?? []} category={category} book={only} onChange={(scope) => update({ category: scope.category, book: scope.book })} />
       </div>
+      {!books.data && !books.error && <Loading>Loading books…</Loading>}
       {books.data && shown.length === 0 && (
         <Empty title={books.data.length ? "No books match the filter" : "The library is empty"}>
           {!books.data.length && (
@@ -105,7 +122,7 @@ export default function Library() {
               <div className="muted line-clamp-2 min-h-8 text-xs">{book.description || book.id}</div>
               <div className="muted mt-1.5 flex flex-wrap gap-x-3 text-xs">
                 <span>{bytes(book.size)}</span>
-                <span>{count(book.article_count)} articles</span>
+                <span>{plural(book.article_count, "article")}</span>
                 <span>{book.date.slice(0, 7)}</span>
                 {book.flavour && <span>{book.flavour}</span>}
               </div>

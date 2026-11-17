@@ -15,11 +15,91 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 _RANGE = re.compile(r"bytes\s*=\s*(\d*)-(\d*)$", re.IGNORECASE)
-_CONTENT_CSP = (
-    "sandbox allow-scripts allow-forms allow-popups; "
-    "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; "
-    "connect-src 'none';"
-)
+
+
+def _content_csp(request: Request) -> str:
+    """Book pages run sandboxed (an opaque origin, no access to the app's token) and may
+    fetch only other book files: ZIMs that are JavaScript apps (Maps2ZIM and the like)
+    load their tiles and data with fetch(). /api stays out of reach."""
+    host = request.headers.get("host")
+    files = f"{request.url.scheme}://{host}/content/ data: blob:" if host else "'none'"
+    return (
+        "sandbox allow-scripts allow-forms allow-popups; "
+        "default-src * 'unsafe-inline' 'unsafe-eval' data: blob:; "
+        f"connect-src {files};"
+    )
+
+
+# Sandboxed book pages may not use cookies or Web Storage: touching them throws, and
+# many ZIM pages (Gutenberg's jQuery cookie plugin, Maps2ZIM's saved view) then stop
+# running. This stands in an in-memory version, only where the browser refuses the real
+# one, so those scripts carry on. Nothing outlives the page.
+_STORAGE_SHIM_JS = """
+(function () {
+  function memory() {
+    var data = {};
+    var has = function (k) { return Object.prototype.hasOwnProperty.call(data, k); };
+    return {
+      getItem: function (k) { return has(k) ? data[k] : null; },
+      setItem: function (k, v) { data[k] = String(v); },
+      removeItem: function (k) { delete data[k]; },
+      clear: function () { data = {}; },
+      key: function (i) { return Object.keys(data)[i] || null; },
+      get length() { return Object.keys(data).length; }
+    };
+  }
+  ["localStorage", "sessionStorage"].forEach(function (name) {
+    try { window[name]; } catch (refused) {
+      try {
+        Object.defineProperty(window, name, { value: memory(), configurable: true });
+      } catch (ignored) {}
+    }
+  });
+  try { document.cookie; } catch (refused) {
+    var jar = {};
+    try {
+      Object.defineProperty(document, "cookie", {
+        configurable: true,
+        get: function () {
+          return Object.keys(jar).map(function (k) { return k + "=" + jar[k]; }).join("; ");
+        },
+        set: function (value) {
+          var pair = String(value).split(";")[0];
+          var at = pair.indexOf("=");
+          if (at > 0) jar[pair.slice(0, at).trim()] = pair.slice(at + 1);
+        }
+      });
+    } catch (ignored) {}
+  }
+})();
+"""
+_STORAGE_SHIM = f"<script>{_STORAGE_SHIM_JS}</script>".encode()
+# Part of every ETag, so browsers drop pages cached before the shim (or a change to it).
+_SHIM_VERSION = "shim1"
+_SHIM_AFTER = [
+    re.compile(rb"<head\b[^>]*>", re.IGNORECASE),
+    re.compile(rb"<html\b[^>]*>", re.IGNORECASE),
+    re.compile(rb"<!doctype[^>]*>", re.IGNORECASE),
+]
+
+
+def _with_storage_shim(html: bytes) -> bytes:
+    """The page with _STORAGE_SHIM placed before any of its own scripts can run."""
+    for tag in _SHIM_AFTER:
+        if match := tag.search(html, 0, 65536):
+            return html[: match.end()] + _STORAGE_SHIM + html[match.end() :]
+    return _STORAGE_SHIM + html
+
+
+def _from_sandboxed_page(request: Request) -> bool:
+    """A request from a sandboxed page, which has the origin "null".
+
+    Book pages are sandboxed, so their module scripts, crossorigin stylesheets and
+    fetch() calls need CORS. A sandboxed page sends no Referer, so a book page on this
+    server can't be told apart from a sandboxed page elsewhere. That is accepted: book
+    content needs no token to read anyway, and this applies to /content only, never /api.
+    """
+    return request.headers.get("origin") == "null"
 
 
 def _content_url(book_id: str, path: str) -> str:
@@ -124,26 +204,37 @@ def content(book_id: str, path: str, request: Request, ctx: Context = Depends(ge
         item = entry.get_item()
         size = item.size
         mimetype = item.mimetype or "application/octet-stream"
+        # Pages get the storage shim, so their length is that of the rewritten body.
+        page: bytes | None = None
+        if mimetype.split(";")[0].strip().lower() in ("text/html", "application/xhtml+xml"):
+            page = _with_storage_shim(bytes(item.content))
+            size = len(page)
     except (RuntimeError, OSError, KeyError) as exc:
         ctx.pool.invalidate(book["path"])
         log.warning("item read failed for %s/%s: %s", book_id, path, exc)
         raise HTTPException(503, "Book unavailable, try rescanning") from None
 
+    version = f"{book['uuid']}/{book.get('size', '')}/{book.get('mtime', '')}"
     etag = (
         '"'
-        + hashlib.sha1(
-            f"{book['uuid']}/{book.get('size', '')}/{book.get('mtime', '')}/{entry.path}".encode()
-        ).hexdigest()[:20]
+        + hashlib.sha1(f"{version}/{entry.path}/{_SHIM_VERSION}".encode()).hexdigest()[:20]
         + '"'
     )
-    cache_control = "private, max-age=3600" if ctx.config.admin_token else "public, max-age=3600"
+    scope = "private" if ctx.config.admin_token else "public"
+    # Pages are checked with the server every time (a cheap 304 while unchanged), so a
+    # change to what the server adds to them reaches pages opened from inside a book;
+    # their images, scripts and styles keep an hour's cache.
+    cache_control = f"{scope}, no-cache" if page is not None else f"{scope}, max-age=3600"
     headers = {
         "ETag": etag,
         "Cache-Control": cache_control,
         "Accept-Ranges": "bytes",
-        "Content-Security-Policy": _CONTENT_CSP,
+        "Content-Security-Policy": _content_csp(request),
         "X-Content-Type-Options": "nosniff",
+        "Vary": "Origin",
     }
+    if _from_sandboxed_page(request):
+        headers["Access-Control-Allow-Origin"] = "null"
     last_modified: str | None = None
     if book.get("mtime") is not None:
         last_modified = email.utils.formatdate(book["mtime"], usegmt=True)
@@ -188,6 +279,8 @@ def content(book_id: str, path: str, request: Request, ctx: Context = Depends(ge
     if request.method == "HEAD":
         headers["Content-Length"] = str(end - start + 1)
         return Response(status_code=status, headers=headers, media_type=mimetype)
+    if page is not None:
+        return Response(page[start : end + 1], status, headers, media_type=mimetype)
     try:
         body = bytes(item.content[start : end + 1])
     except (RuntimeError, OSError, KeyError) as exc:

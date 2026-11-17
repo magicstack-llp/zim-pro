@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Reader: ZIMs that are JavaScript apps load again inside the sandboxed reader. Maps2ZIM showed a blank page and Gutenberg showed no books.
+  - `/content` now answers sandboxed pages (`Origin: null`) with `Access-Control-Allow-Origin: null`.
+  - Book pages may `fetch()` other `/content/` files; `/api` stays blocked.
+  - Pages get an in-memory stand-in for `document.cookie`, `localStorage` and `sessionStorage`, where the sandbox refuses the real ones.
+  - Book pages are sent with `Cache-Control: no-cache`, so they are revalidated with their ETag. Their assets keep a one-hour cache.
+- Catalog: cards no longer overflow at phone width, so the Download button is no longer clipped.
+- Library: filter, language, sort and category are kept in the URL, so Back from a book returns to the same view.
+- Ask: with an empty library, a note says answers can only come from the model and links to the Catalog.
+- Ask: the empty screen is no longer cut off at 200% zoom.
+- Library and Catalog show a loading line instead of a blank page, and their search inputs have accessible labels.
+- Counts are pluralized ("1 article").
+
+### Changed
+
+- Ask uses the Zim Pro elephant in place of the gradient sparkle tile and answer avatar.
+- Ask: the gradient headline, colour wash and gradient buttons are replaced with solid brand teal.
+- One teal `:focus-visible` ring across the app.
+
 ## [0.5.3] - 2026-11-16
 
 ### Fixed

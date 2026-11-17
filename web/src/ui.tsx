@@ -73,6 +73,14 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
   );
 }
 
+export function Loading({ children }: { children: ReactNode }) {
+  return (
+    <p className="muted py-10 text-center text-sm" role="status">
+      {children}
+    </p>
+  );
+}
+
 export function ErrorNote({ message }: { message: string | null }) {
   if (!message) return null;
   return (
